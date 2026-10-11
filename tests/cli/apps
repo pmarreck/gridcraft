@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# The built executables answer their informational flags without a display, and --about names
+# the architecture they were built for. Usage: tests/cli/apps BINDIR
+set -u
+bindir=${1:?usage: tests/cli/apps BINDIR}
+failures=0
+err=$(mktemp "${TMPDIR:-/tmp}/gridcraft-apps.XXXXXX") || exit 1
+trap 'command rm -f -- "$err"' EXIT
+fail() { printf 'FAIL: %s\n' "$*" >&2; failures=$((failures + 1)); }
+arch=$(uname -m)
+[[ $arch != arm64 ]] || arch=aarch64
+for app in gridcraft gridcraft-cli; do
+	for flag in --help -h --version -V --about; do
+		if ! output=$(env -u DISPLAY -u WAYLAND_DISPLAY timeout 20 "$bindir/$app" "$flag" 2>"$err"); then
+			fail "$app $flag exited nonzero: $(cat "$err")"
+			continue
+		fi
+		[[ -n $output ]] || fail "$app $flag printed nothing"
+		[[ ! -s $err ]] || fail "$app $flag wrote to stderr: $(cat "$err")"
+		if [[ $flag == --about ]]; then
+			[[ $output == *"$arch"* ]] || fail "$app --about lacks the architecture $arch: $output"
+			[[ $output != *$'\n'* ]] || fail "$app --about is not one line: $output"
+		fi
+	done
+	printf 'ok: %s informational flags\n' "$app"
+done
+exit "$((failures > 0))"

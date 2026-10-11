@@ -19,6 +19,7 @@ mod native_menu;
 mod print;
 
 use std::cell::RefCell;
+use std::io::Write as _;
 use std::rc::Rc;
 
 use gridcraft_engine::Session;
@@ -220,6 +221,20 @@ fn open_with_system(target: &str) {
     }
 }
 
+const HELP: &str = "\
+GridCraft: open-source, clean-room spreadsheet
+
+Usage: gridcraft [OPTIONS] [FILES...]
+  --sample NAME     Open a sample workbook (sales, budget, grades)
+  --control PORT    Start the localhost JSON-lines control server
+                    (also GRIDCRAFT_CONTROL_PORT)
+  --about           Description, version, OS and CPU architecture
+  -V, --version     Print the version
+  -h, --help        Show this help without opening a window
+
+Use gridcraft-cli for headless conversion, formulas, commands and MCP.
+";
+
 fn icon() -> Option<egui::IconData> {
     #[cfg(target_os = "macos")]
     let bytes = include_bytes!("../../../assets/app-icon/gridcraft-macos-512.png");
@@ -251,9 +266,27 @@ fn main() -> eframe::Result<()> {
         }
     }));
     let args: Vec<String> = std::env::args().skip(1).collect();
-    if args.iter().any(|a| a == "--version" || a == "-V") {
-        println!("GridCraft {}", env!("CARGO_PKG_VERSION"));
-        return Ok(());
+    // Informational flags answer and exit before any window, log file or control server exists.
+    match args.iter().map(String::as_str).find(|a| matches!(*a, "--version" | "-V" | "--about" | "--help" | "-h")) {
+        Some("--version" | "-V") => {
+            let _ = writeln!(std::io::stdout().lock(), "GridCraft {}", env!("CARGO_PKG_VERSION"));
+            return Ok(());
+        }
+        Some("--about") => {
+            let _ = writeln!(
+                std::io::stdout().lock(),
+                "GridCraft {}: open-source, clean-room spreadsheet ({}/{})",
+                env!("CARGO_PKG_VERSION"),
+                std::env::consts::OS,
+                std::env::consts::ARCH
+            );
+            return Ok(());
+        }
+        Some(_) => {
+            let _ = std::io::stdout().lock().write_all(HELP.as_bytes());
+            return Ok(());
+        }
+        None => {}
     }
     let mut control_port: Option<u16> = std::env::var("GRIDCRAFT_CONTROL_PORT").ok().and_then(|p| p.parse().ok());
     let mut sample: Option<String> = None;

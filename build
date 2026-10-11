@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+set -u
+# shellcheck source=scripts/build-common.sh
+source "$(dirname "${BASH_SOURCE[0]}")/scripts/build-common.sh"
+profile=release
+update=auto
+run_tests=0
+target=
+while (($#)); do
+	case "$1" in
+		-h|--help) cat <<'USAGE'
+Usage: ./build [--update|--no-update] [--target TARGET] [--debug|--release] [--test]
+
+Keep the branch rebased on upstream main, then build the GridCraft desktop app and
+gridcraft-cli through Nix. Executables are published in bin/<os>/<arch>/; complete
+products (the macOS .app bundle, Windows DLLs) stay in .nix-out/<rust-target>/<profile>/.
+
+Upstream sync: a verified fetch and rebase onto upstream/main is reused for 24 hours.
+After that, a build fetches and rebases first, and fails before compiling if it can't
+(uncommitted tracked changes, a detached HEAD, a conflict or no network). Rebasing never
+stashes or discards work and never pushes.
+
+  --update          Fetch and rebase now, even within 24 h of the last sync
+  --no-update       Never fetch; fail unless the last sync is under 24 h old
+  --target TARGET   aarch64-macos, aarch64-linux, x86_64-linux, aarch64-windows,
+                    x86_64-windows (default: this machine)
+  --release         Optimized build (default)
+  --debug           Unoptimized build with debug assertions
+  --test            Run ./test before building
+  --about           One-line description, version and platform
+  -V, --version     Print the version
+  -h, --help        Show this help
+
+macOS targets need a native Apple Silicon Nix builder (local or a configured remote).
+`nix build` builds the same optimized host package from the current checkout, without
+any upstream sync.
+USAGE
+			exit 0 ;;
+		--about) about build 'GridCraft Nix build with daily upstream rebase'; exit 0 ;;
+		-V|--version) printf '%s\n' "$GC_VERSION"; exit 0 ;;
+		--debug) profile=debug ;;
+		--release) profile=release ;;
+		--update) update=force ;;
+		--no-update) update=off ;;
+		--test) run_tests=1 ;;
+		--target) shift; (($#)) || die '--target requires a value'; target=$1 ;;
+		--target=*) target=${1#--target=} ;;
+		*) die "unknown option: $1 (see --help)" ;;
+	esac
+	shift
+done
+host_platform
+target=${target:-$GC_HOST}
+target_info "$target"
+command -v nix >/dev/null || die 'Nix is required: https://nixos.org/download/'
+ensure_upstream "$update"
+if ((run_tests)); then "$GC_ROOT/test" || exit 1; fi
+build_target "$target" "$profile"

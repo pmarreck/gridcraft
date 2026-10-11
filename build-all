@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+set -u
+# shellcheck source=scripts/build-common.sh
+source "$(dirname "${BASH_SOURCE[0]}")/scripts/build-common.sh"
+update=auto
+profile=release
+while (($#)); do
+	case "$1" in
+		-h|--help) cat <<'USAGE'
+Usage: ./build-all [--update|--no-update] [--debug|--release]
+
+Sync with upstream main as ./build does (reused for 24 hours), then build all five
+targets through Nix: aarch64-macos, aarch64-linux, x86_64-linux, aarch64-windows and
+x86_64-windows. Every target is attempted; each success is published in bin/<os>/<arch>/,
+a failure leaves that target's previous build in place, and every failure is reported.
+
+  --update          Fetch and rebase now, even within 24 h of the last sync
+  --no-update       Never fetch; fail unless the last sync is under 24 h old
+  --release         Optimized builds (default)
+  --debug           Unoptimized builds with debug assertions
+  --about           One-line description, version and platform
+  -V, --version     Print the version
+  -h, --help        Show this help
+
+macOS needs a native Apple Silicon Nix builder (local or a configured remote).
+USAGE
+			exit 0 ;;
+		--about) about build-all 'GridCraft five-target Nix build'; exit 0 ;;
+		-V|--version) printf '%s\n' "$GC_VERSION"; exit 0 ;;
+		--update) update=force ;;
+		--no-update) update=off ;;
+		--debug) profile=debug ;;
+		--release) profile=release ;;
+		*) die "unknown option: $1 (see --help)" ;;
+	esac
+	shift
+done
+command -v nix >/dev/null || die 'Nix is required: https://nixos.org/download/'
+ensure_upstream "$update"
+failed=
+for target in $GC_TARGETS; do
+	if ! "$GC_ROOT/build" --no-update --target "$target" "--$profile"; then
+		failed="$failed $target"
+	fi
+done
+count=0
+for target in $failed; do count=$((count + 1)); done
+note "Build matrix: $((5 - count)) succeeded, $count failed.${failed:+ Failed:$failed}"
+((count == 0))

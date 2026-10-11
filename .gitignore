@@ -8,3 +8,9 @@ plan/
 /.claude/
 /target-*/
 /craft-fonts/
+HANDOFF*
+/inbox/
+/bin/
+/.nix-out/
+/result
+/result-*

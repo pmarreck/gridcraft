@@ -47,7 +47,9 @@ const USAGE: &str = "usage:
   gridcraft-cli functions [--json] [--search X] [--category C]
   gridcraft-cli mcp [--connect PORT] [--in FILE | --sample NAME]
   gridcraft-cli send <port> <method> [json]
-  gridcraft-cli version";
+  gridcraft-cli version                                   (also --version, -V)
+  gridcraft-cli --about                                   description, version, OS and architecture
+  gridcraft-cli --help                                    this help (-h)";
 
 /// stdout went away. A reader that stopped early (a closed pipe) ends the program quietly; any
 /// other write error is reported.
@@ -65,6 +67,15 @@ fn main() -> ExitCode {
     let r = match args.first().map(String::as_str) {
         Some("--version" | "-V" | "version") => {
             outln!("gridcraft-cli {}", env!("CARGO_PKG_VERSION"));
+            Ok(())
+        }
+        Some("--about") => {
+            outln!(
+                "gridcraft-cli {}: headless GridCraft spreadsheet conversion, formulas, commands and MCP ({}/{})",
+                env!("CARGO_PKG_VERSION"),
+                std::env::consts::OS,
+                std::env::consts::ARCH
+            );
             Ok(())
         }
         Some("--help" | "-h" | "help") => {

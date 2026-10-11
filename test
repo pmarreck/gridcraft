@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+set -u
+# shellcheck source=scripts/build-common.sh
+source "$(dirname "${BASH_SOURCE[0]}")/scripts/build-common.sh"
+if (($#)); then
+	case "$1" in
+		-h|--help) cat <<'USAGE'
+Usage: ./test
+
+Run every required check in pinned Nix sandboxes: workspace unit, integration and doc
+tests; rustfmt; Clippy with warnings denied; asset attribution; crate layering; the
+wasm32 check; the parity checklist; the build-script tests; and the built apps' CLI
+flags. Independent checks keep running after a failure, and any failure exits nonzero.
+Tests use the current checkout and never fetch or rebase.
+
+  --about           One-line description, version and platform
+  -V, --version     Print the version
+  -h, --help        Show this help
+USAGE
+			exit 0 ;;
+		--about) about test 'GridCraft complete Nix test suite'; exit 0 ;;
+		-V|--version) printf '%s\n' "$GC_VERSION"; exit 0 ;;
+		*) die "unknown option: $1 (see --help)" ;;
+	esac
+fi
+command -v nix >/dev/null || die 'Nix is required: https://nixos.org/download/'
+exec nix --extra-experimental-features 'nix-command flakes' flake check "$GC_ROOT" --keep-going --print-build-logs

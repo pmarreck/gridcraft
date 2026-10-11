@@ -1,0 +1,186 @@
+#!/usr/bin/env bash
+# The build scripts' public behavior, without a network or a compiler: real Git repositories (a
+# local bare "upstream"), a project path with spaces, a recording fake `nix` and a fake `date`
+# that sets the clock.
+# Checks pass expressions to eval in single quotes on purpose; they expand when run.
+# shellcheck disable=SC2016,SC2034
+set -u
+repo=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd) || exit 1
+scratch=$(mktemp -d "${TMPDIR:-/tmp}/gridcraft-build-scripts.XXXXXX") || exit 1
+trap 'rm -rf -- "$scratch"' EXIT
+failures=0
+pass() { printf 'ok: %s\n' "$1"; }
+fail() { printf 'FAIL: %s\n' "$1" >&2; [[ ! -s $scratch/err ]] || sed 's/^/    /' "$scratch/err" >&2; failures=$((failures + 1)); }
+# run CMD...: capture stdout/stderr in $scratch/out, $scratch/err and the status in $status.
+run() { "$@" >"$scratch/out" 2>"$scratch/err"; status=$?; }
+expect_ok() { local label=$1; shift; run "$@"; if ((status == 0)); then pass "$label"; else fail "$label (exit $status)"; fi; }
+expect_fail() { local label=$1; shift; run "$@"; if ((status != 0)); then pass "$label"; else fail "$label (unexpectedly succeeded)"; fi; }
+check() { local label=$1; shift; if "$@"; then pass "$label"; else fail "$label"; fi; }
+err_has() { grep -q -- "$1" "$scratch/err"; }
+
+export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null
+export GIT_AUTHOR_NAME=Test GIT_AUTHOR_EMAIL=test@example.invalid
+export GIT_COMMITTER_NAME=Test GIT_COMMITTER_EMAIL=test@example.invalid
+
+# ---------------------------------------------------------------- fakes
+tools="$scratch/tools"
+mkdir -p "$tools"
+printf '#!%s\n' "$BASH" >"$tools/nix"
+cat >>"$tools/nix" <<'EOF'
+# Record the call; for `build`, fail when the target attribute is NIX_FAIL, else link --out-link to
+# the fixture product.
+printf '%s\n' "$*" >>"$NIX_RECORD"
+attribute= link=
+while (($#)); do
+	case "$1" in
+		--out-link) shift; link=$1 ;;
+		*'#packages.'*) attribute=$1 ;;
+	esac
+	shift
+done
+[[ -z ${NIX_FAIL:-} || ${attribute##*.} != "$NIX_FAIL" ]] || exit 23
+ln -sfn "$NIX_FIXTURE_OUTPUT" "$link"
+EOF
+printf '#!%s\n' "$BASH" >"$tools/date"
+cat >>"$tools/date" <<'EOF'
+printf '%s\n' "$FAKE_NOW"
+EOF
+chmod +x "$tools/nix" "$tools/date"
+fixture="$scratch/fixture product"
+mkdir -p "$fixture/bin"
+for exe in gridcraft gridcraft-cli gridcraft.exe gridcraft-cli.exe; do
+	printf '#!/bin/sh\n' >"$fixture/bin/$exe"
+	chmod +x "$fixture/bin/$exe"
+done
+export PATH="$tools:$PATH" NIX_RECORD="$scratch/nix-record" NIX_FIXTURE_OUTPUT="$fixture" FAKE_NOW=1000000
+
+# ---------------------------------------------------------------- informational flags
+for script in build build-all test; do
+	expect_ok "$script --help" "$repo/$script" --help
+	check "$script --help mentions --about" grep -q -- --about "$scratch/out"
+	expect_ok "$script --version" "$repo/$script" --version
+	check "$script --version prints the workspace version" grep -qx '[0-9][0-9.]*[-0-9a-z.]*' "$scratch/out"
+	expect_ok "$script --about" "$repo/$script" --about
+	check "$script --about is one line naming the machine" eval '[[ $(wc -l <"$scratch/out") -eq 1 ]] && grep -q "$(uname -m)" "$scratch/out"'
+	expect_fail "$script rejects an unknown option" "$repo/$script" --frobnicate
+	check "$script names the unknown option" err_has 'unknown option: --frobnicate'
+done
+check 'no build_all alias' test ! -e "$repo/build_all"
+
+# ---------------------------------------------------------------- a fork of a local upstream
+upstream="$scratch/upstream.git"
+seed="$scratch/seed"
+project="$scratch/project with spaces"
+git init -q --bare -b main "$upstream"
+git init -q -b main "$seed"
+printf 'base\n' >"$seed/shared"
+git -C "$seed" add shared && git -C "$seed" commit -qm base && git -C "$seed" push -q "$upstream" main
+git clone -q "$upstream" "$project"
+git -C "$project" remote rename origin upstream
+mkdir -p "$project/scripts"
+cp "$repo/build" "$repo/build-all" "$repo/test" "$repo/Cargo.toml" "$project/"
+cp "$repo/scripts/build-common.sh" "$project/scripts/"
+git -C "$project" add . && git -C "$project" commit -qm 'fork: build scripts'
+fork_commit=$(git -C "$project" rev-parse HEAD)
+# advance_upstream NAME: a new upstream commit that touches only its own file.
+advance_upstream() {
+	printf '%s\n' "$1" >"$seed/$1"
+	git -C "$seed" add "$1" && git -C "$seed" commit -qm "$1" && git -C "$seed" push -q "$upstream" main
+	git -C "$seed" rev-parse HEAD
+}
+contains() { git -C "$project" merge-base --is-ancestor "$1" HEAD 2>/dev/null; }
+nix_calls() { [[ -f $NIX_RECORD ]] && wc -l <"$NIX_RECORD" | tr -d ' ' || echo 0; }
+cache="$project/.git/gridcraft-upstream-sync"
+
+# ---------------------------------------------------------------- the 24-hour sync cache
+expect_fail '--no-update without any sync fails' "$project/build" --no-update
+check '... before invoking nix' test "$(nix_calls)" = 0
+check '... naming the 24 h rule' err_has '24 h'
+
+u1=$(advance_upstream one)
+expect_ok 'first build fetches and rebases' "$project/build"
+check '... onto the new upstream commit' contains "$u1"
+check '... keeping the fork commit' eval '[[ $(git -C "$project" log --format=%s -1) == "fork: build scripts" ]]'
+check '... recording the sync time and upstream commit' eval '[[ $(cat "$cache") == "1000000 $u1" ]]'
+check '... then building through nix' test "$(nix_calls)" = 1
+check '... and publishing bin/<os>/<arch>' eval 'ls "$project"/bin/*/*/gridcraft-cli >/dev/null'
+
+u2=$(advance_upstream two)
+FAKE_NOW=$((1000000 + 86399)) expect_ok 'within 24 h a build reuses the sync' "$project/build"
+check '... without fetching' eval '! contains "$u2"'
+FAKE_NOW=$((1000000 + 86399)) expect_ok '--no-update within 24 h builds' "$project/build" --no-update
+FAKE_NOW=$((1000000 + 86400)) expect_fail '--no-update at 24 h fails' "$project/build" --no-update
+FAKE_NOW=$((1000000 + 86400)) expect_ok 'at 24 h a build refreshes' "$project/build"
+check '... and contains the newer upstream commit' contains "$u2"
+check '... re-stamping the cache' eval '[[ $(cat "$cache") == "1086400 $u2" ]]'
+
+u3=$(advance_upstream three)
+FAKE_NOW=1086401 expect_ok '--update forces a refresh within 24 h' "$project/build" --update
+check '... reaching the newest upstream commit' contains "$u3"
+
+FAKE_NOW=1000 expect_fail 'a sync stamped in the future is not fresh' "$project/build" --no-update
+
+calls=$(nix_calls)
+git -C "$project" branch -q kept HEAD
+git -C "$project" reset -q --hard "$fork_commit"
+FAKE_NOW=1086402 expect_fail '--no-update fails when HEAD lost the synced upstream commit' "$project/build" --no-update
+check '... before invoking nix' test "$(nix_calls)" = "$calls"
+git -C "$project" reset -q --hard kept
+
+# ---------------------------------------------------------------- refusals never touch work
+stale=$((1086401 + 86400))
+printf 'local edit\n' >>"$project/shared"
+FAKE_NOW=$stale expect_fail 'a stale sync with uncommitted tracked changes fails' "$project/build"
+check '... before invoking nix' test "$(nix_calls)" = "$calls"
+check "... saying why" err_has "uncommitted changes"
+check '... keeping the edit' grep -q 'local edit' "$project/shared"
+check '... without stashing it' test -z "$(git -C "$project" stash list)"
+git -C "$project" checkout -q -- shared
+
+printf 'untracked\n' >"$project/notes.md"
+FAKE_NOW=$stale expect_ok 'untracked files do not block a sync' "$project/build"
+check '... and survive it' test -f "$project/notes.md"
+calls=$(nix_calls)
+
+printf 'fork side\n' >"$project/shared"
+git -C "$project" commit -qam 'fork: edit shared'
+printf 'upstream side\n' >"$seed/shared"
+git -C "$seed" commit -qam 'upstream: edit shared' && git -C "$seed" push -q "$upstream" main
+FAKE_NOW=$((stale + 86400)) expect_fail 'a rebase conflict fails' "$project/build"
+check '... before invoking nix' test "$(nix_calls)" = "$calls"
+check '... explaining how to continue or abort' err_has 'git rebase --abort'
+FAKE_NOW=$((stale + 86400)) expect_fail 'a build during an unfinished rebase is refused' "$project/build" --update
+check '... saying why' err_has 'in progress'
+git -C "$project" rebase --abort
+check '... and aborting restores the fork commit' eval '[[ $(git -C "$project" log --format=%s -1) == "fork: edit shared" ]]'
+git -C "$project" reset -q --hard HEAD~1
+
+git -C "$project" checkout -q --detach
+FAKE_NOW=$((stale + 86400)) expect_fail 'a detached HEAD is refused' "$project/build" --update
+check '... saying why' err_has 'detached'
+git -C "$project" checkout -q main
+
+# ---------------------------------------------------------------- publication and the matrix
+FAKE_NOW=$((stale + 86400)) expect_ok 'sync before the matrix' "$project/build"
+now_ok=$((stale + 86400))
+host_link=$(cd "$project/bin" && ls -d -- */*)
+FAKE_NOW=$now_ok expect_ok "a debug build publishes" "$project/build" --no-update --debug
+before=$(readlink "$project/bin/$host_link")
+FAKE_NOW=$now_ok NIX_FAIL="$(uname -m | sed s/arm64/aarch64/)-$(uname -s | tr "[:upper:]" "[:lower:]" | sed s/darwin/macos/)-debug" expect_fail 'a failed build exits nonzero' "$project/build" --no-update --debug
+check '... leaving the published build in place' eval '[[ $(readlink "$project/bin/$host_link") == "$before" ]]'
+
+rm -rf -- "${project:?}/bin" "${project:?}/.nix-out"
+: >"$NIX_RECORD"
+FAKE_NOW=$now_ok NIX_FAIL=aarch64-linux expect_fail 'build-all reports a failed target' "$project/build-all" --no-update
+check '... naming it' err_has "Failed: aarch64-linux"
+check '... after attempting all five targets' test "$(nix_calls)" = 5
+for dir in macos/aarch64 linux/x86_64 windows/aarch64 windows/x86_64; do
+	check "... publishing bin/$dir" test -L "$project/bin/$dir"
+done
+check '... and nothing for the failed target' test ! -e "$project/bin/linux/aarch64"
+check 'windows targets publish .exe files' test -x "$project/bin/windows/aarch64/gridcraft.exe"
+
+if ((failures)); then
+	printf '%d build-script check(s) failed\n' "$failures" >&2
+	exit 1
+fi

@@ -101,6 +101,35 @@
 
 ## Quick start
 
+With [Nix](https://nixos.org/download/) installed:
+
+```sh
+./build                  # rebase on upstream main if the last sync is over 24 h old, then build
+./build --no-update      # build without fetching (needs a sync from the last 24 h)
+./build --update         # fetch and rebase now
+./test                   # every test and quality gate, in pinned Nix sandboxes
+./build-all              # ARM64 macOS, Linux and Windows; x86-64 Linux and Windows
+nix build                # the same optimized host package as ./build, linked at result/
+```
+
+Executables are published in `bin/<os>/<arch>/` (for example `bin/linux/x86_64/gridcraft` and
+`bin/linux/x86_64/gridcraft-cli`); add only your platform's directory to `PATH`. Complete
+products stay in `.nix-out/<rust-target>/<profile>/`, including the macOS
+`Applications/GridCraft.app` bundle and the DLLs Windows builds load. `--debug` builds without
+optimization; every script and both apps answer `--help`, `--version` and `--about`.
+
+The upstream sync is recorded inside `.git` and reused for 24 hours. It requires a checked-out
+branch with no uncommitted changes to tracked files, stops on a rebase conflict without
+discarding anything, and never pushes. macOS targets need a native Apple Silicon Nix builder
+(local or a configured remote builder). Nix runs on Linux and macOS; on Windows, use WSL. Linux
+GUI builds load their graphics libraries from the Nix store, so they are not standalone binaries. The
+macOS products link Nix's `libiconv` and require macOS 14 or later, so the `.app` runs where that
+Nix store path exists; it is not yet a standalone bundle.
+`nix develop` gives a shell with the pinned Rust toolchain, Clippy, rustfmt, the wasm32 target and
+Trunk.
+
+With Cargo directly:
+
 ```sh
 cargo run --release -p gridcraft                              # desktop app
 cargo run --release -p gridcraft -- --sample sales            # open a sample (sales, budget, grades)

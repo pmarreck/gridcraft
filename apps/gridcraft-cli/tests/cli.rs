@@ -25,6 +25,15 @@ fn tmpdir(name: &str) -> PathBuf {
 }
 
 #[test]
+fn about_is_one_line_with_version_os_and_arch() {
+    let out = ok(&["--about"]);
+    assert_eq!(out.lines().count(), 1, "{out:?}");
+    assert!(out.contains(env!("CARGO_PKG_VERSION")), "{out:?}");
+    assert!(out.contains(std::env::consts::OS), "{out:?}");
+    assert!(out.contains(std::env::consts::ARCH), "{out:?}");
+}
+
+#[test]
 fn version_and_usage() {
     assert_eq!(ok(&["--version"]).trim(), format!("gridcraft-cli {}", env!("CARGO_PKG_VERSION")));
     assert_eq!(ok(&["version"]).trim(), format!("gridcraft-cli {}", env!("CARGO_PKG_VERSION")));
