@@ -12,7 +12,7 @@
 - [x] Built all five targets and inspected headers: x86_64/aarch64 Linux ELF, x86_64/ARM64 Windows PE32+ (GUI + console, .rsrc, real DLLs), arm64 macOS Mach-O min 14.0 via the remote Mac builder; launchers are native (done 2026-10-11 14:00 EDT)
 - [ ] macOS Nix products link /nix/store libiconv: relink to /usr/lib/libiconv.2.dylib and re-sign (ad hoc) so the .app runs on a Mac without Nix; verify with llvm-objdump --dylibs-used.
 - [x] Annotate new files and important directories with dirtree notes. (done 2026-10-11 14:00 EDT)
-- [ ] Create the pmarreck/gridcraft fork (origin → upstream rename), keep `main`, push after green tests; set up Mechatron Prime CI.
+- [x] Fork published (origin is the fork, upstream is storytold/gridcraft; branch `main`); Mechatron Prime CI webhook provisioned; first build of 33e9712 passed all 14 targets in 541 s, badge PASSING. (2026-10-11 3:36 PM EDT)
 - Keep local agent-instruction overrides and handoff notes out of the repository.
 
 ## Web application
