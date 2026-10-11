@@ -1,6 +1,10 @@
 //! The browser shell: web `Services`, drag-and-drop, and the eframe web runner.
 
+use std::cell::RefCell;
+use std::rc::Rc;
+
 use gridcraft_engine::Session;
+use gridcraft_ui_egui::library::Library;
 use gridcraft_ui_egui::{Inbox, Services, SheetApp};
 use wasm_bindgen::JsCast as _;
 use wasm_bindgen::JsValue;
@@ -19,15 +23,36 @@ pub fn start() {
             log::error!("missing <canvas id=\"{CANVAS_ID}\">");
             return;
         };
+        // `?host=parent`: a same-origin page framing GridCraft (such as a Nextcloud app) opens
+        // workbooks in it and stores what it saves (`host`).
+        let bridge = if query_param("host").as_deref() == Some("parent") { crate::host::Bridge::new() } else { None };
+        // Workbooks saved in this browser load before the app starts, so the first frame already
+        // lists them. Without IndexedDB (some private windows) Save falls back to downloads. A host
+        // page stores what GridCraft saves, so the browser library stays closed under one.
+        let storage = if bridge.is_some() {
+            None
+        } else {
+            match crate::storage::open().await {
+            Ok(db) => {
+                let library = Rc::new(Library::new(js_sys::Date::now));
+                match crate::storage::load_all(&db).await {
+                    Ok(entries) => library.restore(entries),
+                    Err(e) => log::error!("couldn't read the workbooks saved in this browser: {e}"),
+                }
+                Some(Storage { library, db, errors: Rc::default() })
+            }
+                Err(e) => {
+                    log::warn!("browser storage is unavailable, so Save downloads: {e}");
+                    None
+                }
+            }
+        };
         let mut options = eframe::WebOptions::default();
         if query().contains("webgl")
             && let eframe::egui_wgpu::WgpuSetup::CreateNew(create) = &mut options.wgpu_options.wgpu_setup
         {
             create.instance_descriptor.backends = eframe::wgpu::Backends::GL;
         }
-        // `?host=parent`: a same-origin page framing GridCraft (such as a Nextcloud app) opens
-        // workbooks in it and stores what it saves (`host`).
-        let bridge = if query_param("host").as_deref() == Some("parent") { crate::host::Bridge::new() } else { None };
         let app_bridge = bridge.clone();
         let result = eframe::WebRunner::new()
             .start(
@@ -44,6 +69,7 @@ pub fn start() {
                         let _ = session.execute("file.new", serde_json::json!({"sample": "sales"}));
                     }
                     let mut services = services(inbox.clone(), cc.egui_ctx.clone());
+                    services.library = storage.as_ref().map(|s| s.library.clone());
                     if let Some(bridge) = &app_bridge {
                         bridge.connect(&mut services, inbox.clone(), cc.egui_ctx.clone());
                     }
@@ -65,7 +91,7 @@ pub fn start() {
                         }
                         bridge.post_ready();
                     }
-                    Ok(Box::new(WebShell { app, inbox, bridge: app_bridge }))
+                    Ok(Box::new(WebShell { app, inbox, bridge: app_bridge, storage }))
                 }),
             )
             .await;
@@ -93,6 +119,42 @@ struct WebShell {
     app: SheetApp,
     inbox: Inbox,
     bridge: Option<crate::host::Bridge>,
+    storage: Option<Storage>,
+}
+
+/// The browser workbook library and the IndexedDB database it is written behind to.
+struct Storage {
+    library: Rc<Library>,
+    db: web_sys::IdbDatabase,
+    /// Failed writes, reported in a message box on the next frame.
+    errors: Rc<RefCell<Vec<String>>>,
+}
+
+impl Storage {
+    /// Hands the library's pending changes to IndexedDB (one transaction per batch) and reports
+    /// writes that failed earlier.
+    fn flush(&self, app: &mut SheetApp, ctx: &egui::Context) {
+        if let Some(e) = self.errors.borrow_mut().drain(..).next_back() {
+            app.message = Some((
+                "GridCraft".into(),
+                format!(
+                    "This browser didn't keep the latest changes to your saved workbooks ({e}). They are still open: download a copy with File › Save As."
+                ),
+            ));
+        }
+        let changes = self.library.take_changes();
+        if changes.is_empty() {
+            return;
+        }
+        let (db, errors, ctx) = (self.db.clone(), self.errors.clone(), ctx.clone());
+        wasm_bindgen_futures::spawn_local(async move {
+            if let Err(e) = crate::storage::persist(&db, changes).await {
+                log::error!("saving to browser storage failed: {e}");
+                errors.borrow_mut().push(e);
+                ctx.request_repaint();
+            }
+        });
+    }
 }
 
 impl eframe::App for WebShell {
@@ -113,6 +175,9 @@ impl eframe::App for WebShell {
             });
         }
         self.app.logic(ctx);
+        if let Some(storage) = &self.storage {
+            storage.flush(&mut self.app, ctx);
+        }
     }
 
     fn raw_input_hook(&mut self, _ctx: &egui::Context, raw: &mut egui::RawInput) {
@@ -123,6 +188,10 @@ impl eframe::App for WebShell {
         self.app.ui(ui);
         if let Some(bridge) = &self.bridge {
             bridge.sync(&mut self.app);
+        }
+        // AutoSave runs while drawing; persist what it wrote without waiting for another frame.
+        if let Some(storage) = &self.storage {
+            storage.flush(&mut self.app, ui.ctx());
         }
     }
 }
@@ -274,7 +343,6 @@ fn mime_for(name: &str) -> &'static str {
 }
 
 /// Trigger a browser save dialog or download of `bytes` named after `name`.
-
 fn download(name: &str, bytes: &[u8]) -> Result<(), String> {
     let js = |e: wasm_bindgen::JsValue| format!("{e:?}");
     let window = web_sys::window().ok_or("no window")?;

@@ -154,8 +154,16 @@ cd apps/gridcraft-web && trunk build --release     # → dist/web (serve it with
 cd apps/gridcraft-web && trunk serve --release     # http://127.0.0.1:8771  (?sample=sales opens a sample)
 ```
 
-You need [trunk](https://trunkrs.dev) and the `wasm32-unknown-unknown` target. Open uses the
-browser's file picker (dropping files works too) and Save downloads the workbook.
+You need [trunk](https://trunkrs.dev) and the `wasm32-unknown-unknown` target.
+
+The browser keeps a library of workbooks in its own storage (IndexedDB), which serves as
+GridCraft's file system there. Saving a new workbook offers two places: **In this browser**,
+under a name you choose, or a download to your computer. A workbook saved in the browser then
+saves back to it with Ctrl+S and AutoSave. File › Open lists the stored workbooks to open,
+rename or delete (rename and delete apply to workbooks that are not open), and imports files
+from your computer through the file picker or by dropping them on the page. Stored workbooks
+stay in that browser profile only; clearing the site's data deletes them, so download a copy of
+anything you need to keep. Where IndexedDB is unavailable, Save downloads instead.
 
 With Nix, `nix build .#web` builds the same site offline (Trunk with the wasm-bindgen CLI that
 matches `Cargo.lock`), and `./deploy-web` publishes it on the `gh-pages` branch of your fork

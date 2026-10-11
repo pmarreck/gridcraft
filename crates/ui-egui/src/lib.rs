@@ -22,6 +22,7 @@ pub mod i18n;
 pub mod icons;
 pub mod keymap;
 pub mod keytips;
+pub mod library;
 pub mod outline;
 pub mod panes;
 pub mod paper_view;
@@ -196,6 +197,9 @@ pub struct Services {
     /// Web: hand PDF bytes to the browser's print flow directly (no download,
     /// no intermediate file) — opens the system print dialog on that PDF.
     pub print: Option<Box<dyn Fn(&[u8])>>,
+    /// Web: workbooks kept in the browser. When present it is the engine's file system (see
+    /// [`library`]), Save offers it beside a download, and File › Open lists it.
+    pub library: Option<std::rc::Rc<library::Library>>,
 }
 
 /// Shared queue of files read asynchronously (browser file picker, drag and drop).
@@ -267,6 +271,9 @@ pub struct SheetApp {
 
 impl SheetApp {
     pub fn new(session: Session, services: Services) -> SheetApp {
+        if let Some(lib) = &services.library {
+            gridcraft_engine::io::install_file_store(Some(lib.clone()));
+        }
         SheetApp {
             session,
             ui: UiState::default(),
@@ -724,6 +731,12 @@ impl SheetApp {
                 }
             }
             "saveAs" => {
+                // The browser library is a destination of its own: let Save As offer it. The page's
+                // own Download button passes `{"download": true}` to skip straight to the download.
+                if self.services.library.is_some() && params.get("download").is_none() {
+                    self.open_backstage(backstage::Page::SaveAs);
+                    return;
+                }
                 let suggested = self.session.active().map(|d| d.display_title()).unwrap_or_else(|| "Book1".into());
                 if let Some(pick) = &self.services.pick_save {
                     if let Some(path) = pick(&suggested) {

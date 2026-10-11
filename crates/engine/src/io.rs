@@ -399,8 +399,43 @@ pub fn to_html(wb: &Workbook, sheet: usize) -> Result<String> {
     Ok(out)
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+/// Where the engine reads and writes files when the disk is not the right place: the browser build
+/// keeps workbooks in the browser's own storage. Paths are whatever names the store understands.
+pub trait FileStore {
+    fn read(&self, path: &str) -> Result<Vec<u8>>;
+    fn write(&self, path: &str, bytes: &[u8]) -> Result<()>;
+}
+
+thread_local! {
+    static FILE_STORE: std::cell::RefCell<Option<std::rc::Rc<dyn FileStore>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Routes this thread's file reads and writes (open, save, export) to `store`, or back to the disk
+/// with `None`. Per thread, so tests and embedders running in parallel never share one.
+pub fn install_file_store(store: Option<std::rc::Rc<dyn FileStore>>) {
+    FILE_STORE.with(|slot| *slot.borrow_mut() = store);
+}
+
+fn installed_store() -> Option<std::rc::Rc<dyn FileStore>> {
+    FILE_STORE.with(|slot| slot.borrow().clone())
+}
+
 pub fn read_file(path: &str) -> Result<Vec<u8>> {
+    match installed_store() {
+        Some(store) => store.read(path),
+        None => disk_read(path),
+    }
+}
+
+pub fn write_file(path: &str, bytes: &[u8]) -> Result<()> {
+    match installed_store() {
+        Some(store) => store.write(path, bytes),
+        None => disk_write(path, bytes),
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn disk_read(path: &str) -> Result<Vec<u8>> {
     let meta = std::fs::metadata(path).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
     if meta.len() > 2 * 1024 * 1024 * 1024 {
         return Err(EngineError::Other("files larger than 2 GB aren't supported".into()));
@@ -409,12 +444,12 @@ pub fn read_file(path: &str) -> Result<Vec<u8>> {
 }
 
 #[cfg(target_arch = "wasm32")]
-pub fn read_file(path: &str) -> Result<Vec<u8>> {
+fn disk_read(path: &str) -> Result<Vec<u8>> {
     Err(EngineError::Other(format!("{path}: no file system in the browser")))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub fn write_file(path: &str, bytes: &[u8]) -> Result<()> {
+fn disk_write(path: &str, bytes: &[u8]) -> Result<()> {
     // Write to a temporary file, then rename: a crash never leaves a half-written workbook.
     let tmp = format!("{path}.sctmp");
     std::fs::write(&tmp, bytes).and_then(|()| std::fs::rename(&tmp, path)).map_err(|e| {
@@ -426,7 +461,7 @@ pub fn write_file(path: &str, bytes: &[u8]) -> Result<()> {
 }
 
 #[cfg(target_arch = "wasm32")]
-pub fn write_file(path: &str, _bytes: &[u8]) -> Result<()> {
+fn disk_write(path: &str, _bytes: &[u8]) -> Result<()> {
     Err(EngineError::Other(format!("{path}: no file system in the browser")))
 }
 

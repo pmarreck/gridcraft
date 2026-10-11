@@ -4,9 +4,10 @@
 //! (wgpu: WebGPU where available, WebGL2 otherwise). Build with `trunk build --release` from
 //! this directory (output in `dist/web`).
 //!
-//! Differences from the desktop app: no TCP control channel; Open uses the browser file picker
-//! (bytes arrive asynchronously through `Services::inbox`); Save downloads the file; dropped
-//! files are read asynchronously.
+//! Differences from the desktop app: no TCP control channel; workbooks are saved in a library in
+//! the browser's IndexedDB (`storage`, mirrored by `gridcraft_ui_egui::library`) or downloaded;
+//! files from the computer are imported with the browser file picker or by dropping them (bytes
+//! arrive asynchronously through `Services::inbox`).
 //!
 //! URL query flags: `?webgl` forces WebGL2; `?sample=sales|budget|grades` opens a sample;
 //! `?host=parent` (inside an `<iframe>`) talks to a same-origin parent page instead: it sends the
@@ -16,6 +17,8 @@
 
 #[cfg(target_arch = "wasm32")]
 mod host;
+#[cfg(target_arch = "wasm32")]
+mod storage;
 #[cfg(target_arch = "wasm32")]
 mod web;
 

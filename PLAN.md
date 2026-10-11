@@ -20,4 +20,6 @@
 ## Web application
 
 - [x] Web build in Nix (`nix build .#web`, gated by `checks.web`) and `./deploy-web` publishing to the fork's gh-pages branch for GitHub Pages. Upstream's web app already opens local files (picker or drop) and Save downloads (exports) the workbook. (2026-10-11 5:25 PM EDT)
-- [ ] Web: browser storage as the filesystem (IndexedDB-backed workbook list: open, save, rename, delete) and a Save choice between browser storage and export to the local filesystem; keep local-file import.
+- [x] Web: browser storage as the filesystem. The engine reads and writes through an optional `FileStore`; the browser library (`crates/ui-egui/src/library.rs`) mirrors IndexedDB with a write-behind journal. Save offers "In this browser" or a download; Ctrl+S and AutoSave write to the library; File › Open lists stored workbooks (open, rename, delete) and imports local files. (2026-10-11 7:00 PM EDT)
+- [ ] Web: confirm in a real browser that saved workbooks survive a reload (the IndexedDB adapter has no automated test). Known limits: two tabs saving one name is last-writer-wins; the library is held in memory.
+- [ ] Compare the browser-storage design with the sibling WordCraft project, which is building the same feature.

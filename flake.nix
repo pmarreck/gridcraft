@@ -252,7 +252,7 @@
               pkgs.trunk
             ];
             inputsFrom = [ n.package ];
-            LD_LIBRARY_PATH = lib.optionalString pkgs.stdenv.isLinux (
+            LD_LIBRARY_PATH = lib.optionalString pkgs.stdenv.hostPlatform.isLinux (
               lib.makeLibraryPath [
                 pkgs.wayland
                 pkgs.libxkbcommon

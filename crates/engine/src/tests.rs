@@ -3282,3 +3282,43 @@ fn paste_special_validation_moves_relative_references() {
     assert!(!ok(&mut s, "C3", "5"), "the pasted rule checks C3, not A1");
     assert!(ok(&mut s, "C3", "20"));
 }
+
+/// A store that keeps files in memory, as the browser build does.
+#[derive(Default)]
+struct MemoryStore(std::cell::RefCell<std::collections::BTreeMap<String, Vec<u8>>>);
+
+impl crate::io::FileStore for MemoryStore {
+    fn read(&self, path: &str) -> crate::Result<Vec<u8>> {
+        self.0.borrow().get(path).cloned().ok_or_else(|| crate::EngineError::Other(format!("{path}: not found")))
+    }
+    fn write(&self, path: &str, bytes: &[u8]) -> crate::Result<()> {
+        self.0.borrow_mut().insert(path.to_string(), bytes.to_vec());
+        Ok(())
+    }
+}
+
+#[test]
+fn an_installed_file_store_replaces_the_disk_for_save_and_open() {
+    let store = std::rc::Rc::new(MemoryStore::default());
+    crate::io::install_file_store(Some(store.clone()));
+    let path = format!("gridcraft-store-test-{}.xlsx", std::process::id());
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "42"})).unwrap();
+    s.execute("file.save", json!({"path": path})).unwrap();
+    assert!(!s.doc().unwrap().is_dirty(), "saving to the store clears the dirty flag");
+    assert_eq!(s.doc().unwrap().path.as_deref(), Some(path.as_str()), "the store path becomes the workbook's file");
+    assert!(!std::path::Path::new(&path).exists(), "nothing reaches the disk");
+    assert!(store.0.borrow().contains_key(&path));
+    // Saving again with no path (Ctrl+S, AutoSave) goes back to the store.
+    s.execute("cell.set", json!({"cell": "A1", "input": "43"})).unwrap();
+    s.execute("file.save", json!({})).unwrap();
+    let mut other = Session::new();
+    other.execute("file.open", json!({"path": path})).unwrap();
+    assert_eq!(v(&other, "A1"), Value::Number(43.0));
+    assert!(
+        other.execute("file.open", json!({"path": "missing.xlsx"})).unwrap_err().to_string().contains("not found"),
+        "the store's error is reported"
+    );
+    crate::io::install_file_store(None);
+    assert!(Session::new().execute("file.open", json!({"path": path})).is_err(), "uninstalling returns to the disk, where the file never was");
+}

@@ -18,6 +18,7 @@ use serde_json::{Value as Json, json};
 use crate::SheetApp;
 use crate::i18n::{self, Language};
 use crate::icons::{self, Icon};
+use crate::library::{self, Library};
 use crate::theme::{self, Tokens};
 
 /// Width of the navigation column.
@@ -116,6 +117,15 @@ pub struct Backstage {
     pub save_format: &'static str,
     /// Home and Open: when the recent workbooks were last changed.
     recent: RecentFiles,
+    /// Save As (browser library): the name being typed; `None` until edited (the workbook's own).
+    save_name: Option<String>,
+    /// Save As (browser library): the name the user was asked about replacing.
+    confirm_replace: Option<String>,
+    /// Open (browser library): the workbook being renamed, the new name typed so far, and whether
+    /// the name field has been given the keyboard focus yet.
+    renaming: Option<(String, String, bool)>,
+    /// Open (browser library): the workbook whose deletion awaits confirmation.
+    confirm_delete: Option<String>,
 }
 
 /// Save As file types: (extension, label). The first is the workbook itself; the others are
@@ -134,6 +144,10 @@ impl Backstage {
             preview: None,
             save_format: "xlsx",
             recent: RecentFiles::default(),
+            save_name: None,
+            confirm_replace: None,
+            renaming: None,
+            confirm_delete: None,
         }
     }
 }
@@ -554,7 +568,9 @@ fn new_page(app: &mut SheetApp, ui: &mut Ui, out: &mut Outcome) {
 
 fn open_page(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcome) {
     let lang = app.ui.language;
-    if square_button(ui, Icon::OpenFolder, lang.tr("Browse…")).clicked() {
+    let lib = app.services.library.clone();
+    let browse = if lib.is_some() { "Import from this computer" } else { "Browse…" };
+    if square_button(ui, Icon::OpenFolder, lang.tr(browse)).clicked() {
         let before = app.session.active().map(|d| d.uid);
         app.open_dialog("open", json!({}));
         // Desktop pickers return at once; the web picker delivers later (see `SheetApp::logic`).
@@ -563,6 +579,11 @@ fn open_page(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outc
         }
     }
     ui.add_space(22.0);
+    if let Some(lib) = lib {
+        section(ui, lang, "In this browser");
+        browser_list(app, ui, bs, out, &lib);
+        ui.add_space(22.0);
+    }
     section(ui, lang, "Recent");
     recent_list(app, ui, bs, out, usize::MAX);
 }
@@ -669,13 +690,20 @@ fn save_as(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcom
         });
     });
     ui.add_space(14.0);
+    if fmt == "xlsx"
+        && let Some(lib) = app.services.library.clone()
+    {
+        browser_save(app, ui, bs, out, &lib);
+        ui.add_space(22.0);
+        section(ui, lang, "On this computer");
+    }
     // Desktop: the system Save dialog. Web: the file downloads.
     let web = app.services.pick_save.is_none() && app.services.download.is_some();
     let label = if web { format!("{} (.{fmt})", lang.tr("Download")) } else { lang.tr("Browse…").to_string() };
     if square_button(ui, Icon::OpenFolder, &label).clicked() && app.commit_edit(0, 0, false, false) {
         if fmt == "xlsx" {
             let before = app.session.active().map(|d| (d.path.clone(), d.is_dirty()));
-            app.open_dialog("saveAs", json!({}));
+            app.open_dialog("saveAs", json!({"download": true}));
             let after = app.session.active().map(|d| (d.path.clone(), d.is_dirty()));
             if after != before || app.services.pick_save.is_none() {
                 out.close = true;
@@ -686,6 +714,153 @@ fn save_as(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcom
     }
     ui.add_space(18.0);
     dim(ui, lang.tr("A CSV file, web page or PDF is a copy: the workbook keeps its own file."));
+}
+
+/// The browser library's name for a typed workbook name: trimmed, with `.xlsx` added unless the
+/// name already ends with it (any case), so a saved workbook always reopens as a workbook.
+pub fn browser_file_name(typed: &str) -> String {
+    let name = typed.trim();
+    if name.to_ascii_lowercase().ends_with(".xlsx") { name.to_string() } else { format!("{name}.xlsx") }
+}
+
+/// A byte count as people read file sizes (1 KB = 1024 bytes).
+fn file_size(bytes: usize) -> String {
+    const KB: usize = 1024;
+    match bytes {
+        b if b < KB => format!("{b} bytes"),
+        b if b < KB * KB => format!("{} KB", b.div_ceil(KB)),
+        b => format!("{:.1} MB", b as f64 / (KB * KB) as f64),
+    }
+}
+
+/// Save As › In this browser: a name field and a button that save the workbook into the browser
+/// library. Saving under the name of a different stored workbook asks first.
+fn browser_save(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcome, lib: &Library) {
+    let lang = app.ui.language;
+    section(ui, lang, "In this browser");
+    let current = app.session.active().and_then(|d| d.path.clone());
+    let draft =
+        bs.save_name.get_or_insert_with(|| browser_file_name(&app.session.active().map(|d| d.display_title()).unwrap_or_else(|| "Book1".into())));
+    let mut submit = false;
+    let mut edited = false;
+    ui.horizontal(|ui| {
+        let label = ui.label(lang.tr("Workbook name"));
+        let resp = ui.add(egui::TextEdit::singleline(draft).desired_width(300.0)).labelled_by(label.id);
+        edited = resp.changed();
+        submit = resp.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
+        submit |= ui.button(lang.tr("Save in this browser")).clicked();
+    });
+    let target = browser_file_name(draft);
+    if edited {
+        bs.confirm_replace = None;
+    }
+    let mut save = false;
+    if submit {
+        if let Err(e) = library::check_name(&target) {
+            app.message = Some(("GridCraft".into(), e));
+        } else if lib.contains(&target) && current.as_deref() != Some(target.as_str()) {
+            bs.confirm_replace = Some(target.clone());
+        } else {
+            save = true;
+        }
+    }
+    if bs.confirm_replace.as_deref() == Some(target.as_str()) {
+        ui.add_space(8.0);
+        dim(ui, lang.tr("A workbook with this name is already in this browser."));
+        if ui.button(format!("{} “{target}”", lang.tr("Replace"))).clicked() {
+            save = true;
+        }
+    }
+    if save && app.commit_edit(0, 0, false, false) {
+        app.run_or_alert("file.save", json!({"path": target}));
+        if app.session.active().and_then(|d| d.path.as_deref()) == Some(target.as_str()) {
+            bs.save_name = None;
+            bs.confirm_replace = None;
+            out.close = true;
+        }
+    }
+}
+
+/// Open › In this browser: the library's workbooks, newest first. A click opens one. Workbooks
+/// that aren't open can be renamed in place or deleted after a confirmation (an open one would
+/// be written back by its next save).
+fn browser_list(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcome, lib: &Library) {
+    let t = Tokens::get(ui.ctx());
+    let lang = app.ui.language;
+    let list = lib.list();
+    if list.is_empty() {
+        dim(ui, lang.tr("No workbooks are saved in this browser yet."));
+        return;
+    }
+    let open: Vec<String> = app.session.documents().iter().filter_map(|d| d.path.clone()).collect();
+    let width = ui.available_width().min(CONTENT_W);
+    for w in list {
+        let rename_id = ui.make_persistent_id(("browser_rename", &w.name));
+        if let Some((from, draft, focused)) = bs.renaming.as_mut().filter(|(from, _, _)| *from == w.name) {
+            let resp = ui.add(egui::TextEdit::singleline(draft).id(rename_id).desired_width(300.0));
+            // Focus once the field exists, so the user can type the new name at once.
+            if !*focused {
+                resp.request_focus();
+                *focused = true;
+            }
+            if resp.lost_focus() {
+                if ui.input(|i| i.key_pressed(Key::Enter))
+                    && let Err(e) = lib.rename(from, &browser_file_name(draft))
+                {
+                    app.message = Some(("GridCraft".into(), e));
+                }
+                bs.renaming = None;
+            }
+            continue;
+        }
+        ui.horizontal(|ui| {
+            let (rect, resp) = ui.allocate_exact_size(vec2(width - 200.0, 44.0), Sense::click());
+            resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &w.name));
+            let p = ui.painter();
+            if resp.hovered() {
+                p.rect_filled(rect, 4.0, t.hover);
+            }
+            icons::paint(p, Rect::from_center_size(pos2(rect.left() + 20.0, rect.center().y), vec2(20.0, 20.0)), Icon::Book, t.text);
+            p.text(pos2(rect.left() + 42.0, rect.center().y - 8.0), Align2::LEFT_CENTER, &w.name, theme::ui_font(13.5), t.text);
+            p.text(pos2(rect.left() + 42.0, rect.center().y + 9.0), Align2::LEFT_CENTER, file_size(w.size), theme::ui_font(11.5), t.text_dim);
+            if resp.clicked() {
+                app.open_path(&w.name);
+                if app.session.active().and_then(|d| d.path.as_deref()) == Some(w.name.as_str()) {
+                    out.close = true;
+                }
+            }
+            if open.contains(&w.name) {
+                dim(ui, lang.tr("Open"));
+                return;
+            }
+            let rename = ui.button(lang.tr("Rename"));
+            rename.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, format!("{} {}", lang.tr("Rename"), w.name)));
+            if rename.clicked() {
+                bs.renaming = Some((w.name.clone(), w.name.clone(), false));
+                bs.confirm_delete = None;
+            }
+            let delete = ui.button(lang.tr("Delete"));
+            delete.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, format!("{} {}", lang.tr("Delete"), w.name)));
+            if delete.clicked() {
+                bs.confirm_delete = Some(w.name.clone());
+            }
+        });
+        if bs.confirm_delete.as_deref() == Some(w.name.as_str()) {
+            ui.horizontal(|ui| {
+                ui.add_space(42.0);
+                dim(ui, lang.tr("Deleting removes it from this browser for good."));
+                if ui.button(format!("{} “{}” {}", lang.tr("Delete"), w.name, lang.tr("permanently"))).clicked() {
+                    if let Err(e) = lib.remove(&w.name) {
+                        app.message = Some(("GridCraft".into(), e));
+                    }
+                    bs.confirm_delete = None;
+                }
+                if ui.button(lang.tr("Cancel")).clicked() {
+                    bs.confirm_delete = None;
+                }
+            });
+        }
+    }
 }
 
 fn print(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcome) {
@@ -1084,5 +1259,34 @@ mod tests {
     fn recent_paths_split_without_touching_the_disk() {
         assert_eq!(split_path("/home/me/Budget.xlsx"), ("Budget.xlsx".into(), "/home/me".into()));
         assert_eq!(split_path("Budget.xlsx"), ("Budget.xlsx".into(), "".into()));
+    }
+
+    #[test]
+    fn browser_names_always_end_in_xlsx() {
+        for (typed, stored) in [
+            ("Budget", "Budget.xlsx"),
+            ("  Budget  ", "Budget.xlsx"),
+            ("Budget.xlsx", "Budget.xlsx"),
+            ("Budget.XLSX", "Budget.XLSX"),
+            ("Budget.csv", "Budget.csv.xlsx"),
+            ("Report.v2", "Report.v2.xlsx"),
+        ] {
+            assert_eq!(browser_file_name(typed), stored, "{typed:?}");
+        }
+    }
+
+    #[test]
+    fn file_sizes_read_like_a_file_manager() {
+        for (bytes, shown) in [
+            (0, "0 bytes"),
+            (1023, "1023 bytes"),
+            (1024, "1 KB"),
+            (1025, "2 KB"),
+            (1024 * 1024 - 1, "1024 KB"),
+            (1024 * 1024, "1.0 MB"),
+            (5 * 1024 * 1024 + 512 * 1024, "5.5 MB"),
+        ] {
+            assert_eq!(file_size(bytes), shown, "{bytes}");
+        }
     }
 }
