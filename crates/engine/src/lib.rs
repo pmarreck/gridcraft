@@ -112,6 +112,8 @@ pub struct DocState {
     /// The format `path`'s content was recognised as when its extension doesn't name one (an
     /// XLSX called `budget.dat`): Save writes it back in that format.
     pub content_kind: Option<io::FileKind>,
+    /// Saves a file store has not finished yet: (ticket, the workbook written), oldest first.
+    pub pending: Vec<(u64, Arc<Workbook>)>,
 }
 
 static NEXT_UID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -137,6 +139,7 @@ impl DocState {
             sheet_selections: vec![],
             unlocked_ranges: vec![],
             content_kind: None,
+            pending: vec![],
         }
     }
     pub fn is_dirty(&self) -> bool {
@@ -289,6 +292,38 @@ impl Session {
         self.docs.push(d);
         self.active = self.docs.len() - 1;
         self.active
+    }
+    /// A file store finished write `ticket` and every earlier one: each workbook waiting on them
+    /// is saved as of the newest version written (later edits stay unsaved). Returns how many
+    /// workbooks changed. Tickets are in order, so a late confirmation never rolls a save back.
+    pub fn confirm_write(&mut self, ticket: u64) -> usize {
+        let mut confirmed = 0;
+        for d in &mut self.docs {
+            if let Some(i) = d.pending.iter().rposition(|(t, _)| *t <= ticket) {
+                d.saved = d.pending[i].1.clone();
+                d.pending.drain(..=i);
+                confirmed += 1;
+            }
+        }
+        confirmed
+    }
+    /// Replaces workbook `i` with a fresh read of its file, in place: same position, path and
+    /// title, nothing to undo. For taking a newer version another writer saved.
+    pub fn reload(&mut self, i: usize) -> Result<()> {
+        let d = self.docs.get(i).ok_or(EngineError::NoDocument)?;
+        let path = d.path.clone().ok_or_else(|| EngineError::Other(format!("“{}” has no file to reload.", d.title)))?;
+        let (wb, _) = io::open_bytes(&path, &io::read_file(&path)?)?;
+        let title = d.title.clone();
+        if let Some(slot) = self.docs.get_mut(i) {
+            *slot = DocState::new(wb, Some(path), title);
+        }
+        Ok(())
+    }
+    /// A file store gave up on write `ticket`: the workbook it held stays unsaved.
+    pub fn fail_write(&mut self, ticket: u64) {
+        for d in &mut self.docs {
+            d.pending.retain(|(t, _)| *t != ticket);
+        }
     }
     pub fn close_document(&mut self, i: usize) {
         if i < self.docs.len() {

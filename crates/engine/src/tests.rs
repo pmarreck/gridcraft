@@ -3291,9 +3291,9 @@ impl crate::io::FileStore for MemoryStore {
     fn read(&self, path: &str) -> crate::Result<Vec<u8>> {
         self.0.borrow().get(path).cloned().ok_or_else(|| crate::EngineError::Other(format!("{path}: not found")))
     }
-    fn write(&self, path: &str, bytes: &[u8]) -> crate::Result<()> {
+    fn write(&self, path: &str, bytes: &[u8]) -> crate::Result<crate::io::Written> {
         self.0.borrow_mut().insert(path.to_string(), bytes.to_vec());
-        Ok(())
+        Ok(crate::io::Written::Durable)
     }
 }
 
@@ -3321,4 +3321,92 @@ fn an_installed_file_store_replaces_the_disk_for_save_and_open() {
     );
     crate::io::install_file_store(None);
     assert!(Session::new().execute("file.open", json!({"path": path})).is_err(), "uninstalling returns to the disk, where the file never was");
+}
+
+/// A store whose writes finish later, as IndexedDB's do: each write gets the next ticket.
+#[derive(Default)]
+struct DeferredStore(std::cell::Cell<u64>);
+
+impl crate::io::FileStore for DeferredStore {
+    fn read(&self, path: &str) -> crate::Result<Vec<u8>> {
+        Err(crate::EngineError::Other(format!("{path}: not found")))
+    }
+    fn write(&self, _path: &str, _bytes: &[u8]) -> crate::Result<crate::io::Written> {
+        self.0.set(self.0.get() + 1);
+        Ok(crate::io::Written::Pending(self.0.get()))
+    }
+}
+
+#[test]
+fn a_pending_write_keeps_the_workbook_unsaved_until_the_store_confirms_it() {
+    crate::io::install_file_store(Some(std::rc::Rc::new(DeferredStore::default())));
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "1"})).unwrap();
+    let r = s.execute("file.save", json!({"path": "Book.xlsx"})).unwrap();
+    assert_eq!(r["pending"], true);
+    assert_eq!(s.doc().unwrap().path.as_deref(), Some("Book.xlsx"), "the store path is the workbook's file at once");
+    assert!(s.doc().unwrap().is_dirty(), "not saved until the store confirms");
+    s.confirm_write(1);
+    assert!(!s.doc().unwrap().is_dirty(), "confirmed: saved");
+
+    // An edit made while a write is pending stays unsaved after the confirmation.
+    s.execute("cell.set", json!({"cell": "A1", "input": "2"})).unwrap();
+    s.execute("file.save", json!({})).unwrap();
+    s.execute("cell.set", json!({"cell": "A1", "input": "3"})).unwrap();
+    s.confirm_write(2);
+    assert!(s.doc().unwrap().is_dirty(), "the edit after the save is not in the store");
+    s.execute("cell.set", json!({"cell": "A1", "input": "2"})).unwrap();
+    assert!(s.doc().unwrap().is_dirty(), "equal values are still a different workbook than the one written");
+
+    // A failed write leaves the workbook unsaved; confirming a later write still counts.
+    s.execute("file.save", json!({})).unwrap();
+    s.fail_write(3);
+    assert!(s.doc().unwrap().is_dirty());
+    s.confirm_write(3);
+    assert!(s.doc().unwrap().is_dirty(), "a failed write can't be confirmed afterwards");
+    s.execute("file.save", json!({})).unwrap();
+    s.confirm_write(4);
+    assert!(!s.doc().unwrap().is_dirty());
+    assert!(s.confirm_write(99) == 0, "confirming a ticket no workbook waits for changes nothing");
+    crate::io::install_file_store(None);
+}
+
+#[test]
+fn confirming_a_later_write_also_covers_earlier_ones() {
+    crate::io::install_file_store(Some(std::rc::Rc::new(DeferredStore::default())));
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "1"})).unwrap();
+    s.execute("file.save", json!({"path": "Book.xlsx"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A1", "input": "2"})).unwrap();
+    s.execute("file.save", json!({})).unwrap();
+    assert_eq!(s.confirm_write(2), 1, "one workbook became saved");
+    assert!(!s.doc().unwrap().is_dirty(), "the latest confirmed version is the saved one");
+    s.confirm_write(1);
+    assert!(!s.doc().unwrap().is_dirty(), "a late confirmation of an older write never rolls the saved version back");
+    crate::io::install_file_store(None);
+}
+
+#[test]
+fn reload_replaces_an_open_workbook_with_its_file_in_place() {
+    let store = std::rc::Rc::new(MemoryStore::default());
+    crate::io::install_file_store(Some(store.clone()));
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "1"})).unwrap();
+    s.execute("file.save", json!({"path": "Shared.xlsx"})).unwrap();
+    s.new_workbook();
+    // Another writer replaces the file.
+    let mut other = Session::new();
+    other.execute("file.open", json!({"path": "Shared.xlsx"})).unwrap();
+    other.execute("cell.set", json!({"cell": "A1", "input": "2"})).unwrap();
+    other.execute("file.save", json!({})).unwrap();
+    s.reload(0).unwrap();
+    assert_eq!(s.active_index(), 1, "the active workbook doesn't change");
+    assert_eq!(s.documents().len(), 2);
+    let d = &s.documents()[0];
+    assert_eq!(d.path.as_deref(), Some("Shared.xlsx"));
+    assert_eq!(d.wb.active().unwrap().value(CellRef::parse("A1").unwrap()), Value::Number(2.0));
+    assert!(!d.is_dirty() && d.undo.is_empty(), "the reloaded workbook is saved, with nothing to undo");
+    assert!(s.reload(1).is_err(), "a workbook without a file can't be reloaded");
+    assert!(s.reload(9).is_err());
+    crate::io::install_file_store(None);
 }

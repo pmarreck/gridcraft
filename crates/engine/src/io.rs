@@ -401,9 +401,18 @@ pub fn to_html(wb: &Workbook, sheet: usize) -> Result<String> {
 
 /// Where the engine reads and writes files when the disk is not the right place: the browser build
 /// keeps workbooks in the browser's own storage. Paths are whatever names the store understands.
+/// How far a store has taken a write. A pending write is not yet safe: the workbook stays unsaved
+/// until [`crate::Session::confirm_write`] reports the store finished it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Written {
+    Durable,
+    /// Still in flight; the store will confirm or fail this ticket. Tickets only increase.
+    Pending(u64),
+}
+
 pub trait FileStore {
     fn read(&self, path: &str) -> Result<Vec<u8>>;
-    fn write(&self, path: &str, bytes: &[u8]) -> Result<()>;
+    fn write(&self, path: &str, bytes: &[u8]) -> Result<Written>;
 }
 
 thread_local! {
@@ -427,10 +436,10 @@ pub fn read_file(path: &str) -> Result<Vec<u8>> {
     }
 }
 
-pub fn write_file(path: &str, bytes: &[u8]) -> Result<()> {
+pub fn write_file(path: &str, bytes: &[u8]) -> Result<Written> {
     match installed_store() {
         Some(store) => store.write(path, bytes),
-        None => disk_write(path, bytes),
+        None => disk_write(path, bytes).map(|()| Written::Durable),
     }
 }
 

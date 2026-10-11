@@ -165,6 +165,14 @@ from your computer through the file picker or by dropping them on the page. Stor
 stay in that browser profile only; clearing the site's data deletes them, so download a copy of
 anything you need to keep. Where IndexedDB is unavailable, Save downloads instead.
 
+A workbook counts as saved only once the browser confirms it stored the write; until then it
+stays marked as edited, and closing the tab asks first. Several tabs can share the library:
+each stored workbook has a revision, and a write that expects an older one is refused. When
+another tab saves a workbook open here, a copy without unsaved changes reloads the newer
+version; one with unsaved changes asks whether to keep this version, use the other tab's, or
+save a copy under a new name. The IndexedDB layer's tests run in headless Chromium
+(`nix build .#checks.x86_64-linux.web-storage`).
+
 With Nix, `nix build .#web` builds the same site offline (Trunk with the wasm-bindgen CLI that
 matches `Cargo.lock`), and `./deploy-web` publishes it on the `gh-pages` branch of your fork
 for GitHub Pages. That branch holds only the built site; each deploy is one commit naming its

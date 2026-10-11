@@ -16,9 +16,9 @@ let
   version = (builtins.fromTOML (builtins.readFile ../Cargo.toml)).workspace.package.version;
   # Must equal the wasm-bindgen version in Cargo.lock; the flake's web check fails otherwise.
   wasmBindgenVersion =
-    (lib.findFirst (p: p.name == "wasm-bindgen") (throw "wasm-bindgen is not in Cargo.lock") (
-      builtins.fromTOML (builtins.readFile ../Cargo.lock)
-    ).package).version;
+    (lib.findFirst (p: p.name == "wasm-bindgen") (throw "wasm-bindgen is not in Cargo.lock")
+      (builtins.fromTOML (builtins.readFile ../Cargo.lock)).package
+    ).version;
   wasm-bindgen-cli =
     pkgs."wasm-bindgen-cli_${lib.replaceStrings [ "." ] [ "_" ] wasmBindgenVersion}"
       or (throw "nixpkgs has no wasm-bindgen-cli ${wasmBindgenVersion}; package it or update nixpkgs");
@@ -30,18 +30,46 @@ let
     cargoExtraArgs = "--locked -p gridcraft-web";
     doCheck = false;
   };
+  testArgs = args // {
+    pname = "gridcraft-web-storage-tests";
+    doCheck = true;
+  };
 in
-craneLib.buildTrunkPackage (
-  args
-  // {
-    inherit wasm-bindgen-cli;
-    cargoArtifacts = craneLib.buildDepsOnly args;
-    # Trunk.toml lives beside the page and writes to the workspace's dist/web.
-    buildPhaseCargoCommand = ''
-      (cd apps/gridcraft-web && trunk build --release=true)
-    '';
-    installPhaseCommand = ''
-      cp -r dist/web "$out"
-    '';
-  }
-)
+{
+  site = craneLib.buildTrunkPackage (
+    args
+    // {
+      inherit wasm-bindgen-cli;
+      cargoArtifacts = craneLib.buildDepsOnly args;
+      # Trunk.toml lives beside the page and writes to the workspace's dist/web.
+      buildPhaseCargoCommand = ''
+        (cd apps/gridcraft-web && trunk build --release=true)
+      '';
+      installPhaseCommand = ''
+        cp -r dist/web "$out"
+      '';
+    }
+  );
+
+  # The IndexedDB layer's tests, run in headless Chromium through wasm-bindgen-test-runner.
+  # Linux only: nixpkgs has no Chromium for macOS.
+  storageTests = craneLib.cargoTest (
+    testArgs
+    // {
+      cargoArtifacts = craneLib.buildDepsOnly testArgs;
+      nativeBuildInputs = [
+        wasm-bindgen-cli
+        pkgs.chromium
+        pkgs.chromedriver
+      ];
+      CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER = "wasm-bindgen-test-runner";
+      CHROMEDRIVER = lib.getExe pkgs.chromedriver;
+      WASM_BINDGEN_TEST_TIMEOUT = "120";
+      # Without a font configuration Chromium aborts in the sandbox before any page loads.
+      FONTCONFIG_FILE = pkgs.makeFontsConf { fontDirectories = [ pkgs.dejavu_fonts ]; };
+      preCheck = ''
+        export HOME="$TMPDIR"
+      '';
+    }
+  );
+}

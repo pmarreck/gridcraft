@@ -119,13 +119,17 @@ fn save(s: &mut Session, p: &Json) -> Result<Json> {
         Some(kind) => crate::io::save_bytes_as(wb, &path, kind)?,
         None => crate::io::save_bytes(wb, &path)?,
     };
-    crate::io::write_file(&path, &bytes)?;
-    // Only a full-fidelity format clears the dirty flag and becomes the document's file.
+    let written = crate::io::write_file(&path, &bytes)?;
+    // Only a full-fidelity format clears the dirty flag and becomes the document's file. A write
+    // the store hasn't finished clears it only once the store confirms (`Session::confirm_write`).
     if matches!(kind, Some(crate::io::FileKind::Xlsx | crate::io::FileKind::Json)) {
-        d.saved = d.wb.clone();
+        match written {
+            crate::io::Written::Durable => d.saved = d.wb.clone(),
+            crate::io::Written::Pending(ticket) => d.pending.push((ticket, d.wb.clone())),
+        }
         d.path = Some(path.clone());
     }
-    Ok(json!({"path": path, "bytes": bytes.len()}))
+    Ok(json!({"path": path, "bytes": bytes.len(), "pending": matches!(written, crate::io::Written::Pending(_))}))
 }
 
 fn save_as(s: &mut Session, p: &Json) -> Result<Json> {

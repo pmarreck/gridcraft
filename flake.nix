@@ -125,11 +125,12 @@
         // lib.mapAttrs' (name: make: lib.nameValuePair "${name}-debug" (make "dev").package) targets
         // {
           default = (native system).package;
-          web = import ./nix/web.nix {
-            pkgs = pkgsFor system;
-            inherit crane;
-            src = rustSrc;
-          };
+          web =
+            (import ./nix/web.nix {
+              pkgs = pkgsFor system;
+              inherit crane;
+              src = rustSrc;
+            }).site;
         }
       );
 
@@ -139,6 +140,10 @@
           pkgs = pkgsFor system;
           n = native system;
           dev = mk system null "dev";
+          webParts = import ./nix/web.nix {
+            inherit pkgs crane;
+            src = rustSrc;
+          };
           common = dev.args // {
             cargoArtifacts = dev.cargoArtifacts;
           };
@@ -234,6 +239,10 @@
                 bash ${fullSrc}/tests/cli/apps ${n.package}/bin
                 touch "$out"
               '';
+        }
+        # Browser storage against real IndexedDB in headless Chromium (Linux has Chromium).
+        // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+          web-storage = webParts.storageTests;
         }
       );
 

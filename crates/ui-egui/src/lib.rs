@@ -267,6 +267,12 @@ pub struct SheetApp {
     /// holding other text. Once the cut has been pasted, Paste leaves this text alone.
     cut_text: Option<String>,
     pub started: f64,
+    /// Browser library: workbooks changed in another tab whose conflict prompt the user dismissed
+    /// (asked again only after the conflict clears and recurs).
+    pub(crate) library_dismissed: std::collections::HashSet<String>,
+    /// Workbooks (by uid) the user chose to save and close while the write was still pending:
+    /// they close when the browser confirms it, and stay open if it fails.
+    pub(crate) close_after_save: std::collections::HashSet<u64>,
 }
 
 impl SheetApp {
@@ -313,6 +319,8 @@ impl SheetApp {
             clipboard_text_at_copy: None,
             cut_text: None,
             started: now_ms(),
+            library_dismissed: Default::default(),
+            close_after_save: Default::default(),
         }
     }
 
@@ -797,6 +805,95 @@ impl SheetApp {
         self.show_open_warnings(r);
     }
 
+    /// Anything that closing the app now would lose: an unsaved workbook (including one whose write
+    /// the browser hasn't confirmed) or a cell or text box being edited. The web shell asks the
+    /// browser to warn before the tab closes while this holds.
+    pub fn has_unsaved_work(&self) -> bool {
+        self.editor.is_some() || self.text_box_editor.is_some() || self.session.documents().iter().any(|d| d.is_dirty() || !d.pending.is_empty())
+    }
+
+    /// Browser library: the host reports what became of one change it persisted. A committed
+    /// write saves the workbook it held; a refused one leaves it unsaved. A conflict (another tab
+    /// stored first) marks the workbook stale, which [`Self::sync_library`] then resolves.
+    pub fn library_settled(&mut self, change: &library::Change, outcome: library::Outcome) {
+        let Some(lib) = self.services.library.clone() else { return };
+        let ticket = change.ticket();
+        if !matches!(outcome, library::Outcome::Committed) {
+            // A refused write cancels any close waiting on it; the workbook stays open, unsaved.
+            let waiting: Vec<u64> = self.session.documents().iter().filter(|d| d.pending.iter().any(|(t, _)| *t == ticket)).map(|d| d.uid).collect();
+            for uid in waiting {
+                self.close_after_save.remove(&uid);
+            }
+        }
+        match outcome {
+            library::Outcome::Committed => {
+                self.session.confirm_write(ticket);
+                // Finish a Save-and-close whose write just landed.
+                let done: Vec<u64> =
+                    self.session.documents().iter().filter(|d| self.close_after_save.contains(&d.uid) && !d.is_dirty()).map(|d| d.uid).collect();
+                for uid in done {
+                    self.close_after_save.remove(&uid);
+                    if let Some(i) = self.session.documents().iter().position(|d| d.uid == uid) {
+                        self.session.close_document(i);
+                    }
+                }
+            }
+            library::Outcome::Conflict(records) => {
+                self.session.fail_write(ticket);
+                for (name, record) in records {
+                    lib.conflicted(&name, record);
+                }
+                if !matches!(change, library::Change::Put { .. }) {
+                    let names = change.names().join("” or “");
+                    self.message = Some(("GridCraft".into(), format!("“{names}” was changed in another tab, so nothing was renamed or deleted.")));
+                }
+            }
+            library::Outcome::Failed(error, records) => {
+                self.session.fail_write(ticket);
+                for (name, record) in records {
+                    lib.write_failed(&name, record);
+                }
+                self.message = Some((
+                    "GridCraft".into(),
+                    format!(
+                        "This browser couldn't store your change ({error}). Anything unsaved is still open: try again, or download a copy from File › Save As."
+                    ),
+                ));
+            }
+        }
+    }
+
+    /// Browser library: open workbooks another tab has saved since. One with nothing unsaved here
+    /// reloads the newer version; one with unsaved changes (or a cell being edited) asks the user,
+    /// once, whether to keep theirs or this tab's version, or save a copy.
+    fn sync_library(&mut self) {
+        let Some(lib) = self.services.library.clone() else { return };
+        self.library_dismissed.retain(|p| lib.is_stale(p));
+        let active = self.session.active_index();
+        let stale: Vec<(usize, String, bool)> = self
+            .session
+            .documents()
+            .iter()
+            .enumerate()
+            .filter_map(|(i, d)| {
+                let path = d.path.as_ref().filter(|p| lib.is_stale(p))?;
+                let unsaved = d.is_dirty() || !d.pending.is_empty() || (i == active && (self.editor.is_some() || self.text_box_editor.is_some()));
+                Some((i, path.clone(), unsaved))
+            })
+            .collect();
+        for (i, path, unsaved) in stale {
+            if !unsaved {
+                match self.session.reload(i) {
+                    Ok(()) => self.toast = Some((format!("“{path}” was saved in another tab; showing that version."), now_ms())),
+                    Err(e) => self.message = Some(("GridCraft".into(), clean_error(&e.to_string()))),
+                }
+                self.after_engine();
+            } else if i == active && self.dialog.is_none() && !self.library_dismissed.contains(&path) {
+                self.dialog = dialogs::Dialog::open(self, "libraryConflict", json!({"path": path}));
+            }
+        }
+    }
+
     /// Turns the `warnings` a `file.open` result carries into an info-bar notice, choosing the
     /// most important one (a preserved VBA project outranks, say, a skipped optional part).
     /// Kept deliberately generic: any open-time warning can reach the user this way.
@@ -1006,6 +1103,7 @@ impl SheetApp {
         // A keytip control request lives one frame: the ribbon consumes it during `ui`, and
         // anything that never reached a control (collapsed ribbon, tab switch) is dropped.
         self.ui.keytip_invoke = None;
+        self.sync_library();
         if self.fonts_han.is_some_and(|han| han != theme::HanOrder::of(self.ui.language)) {
             self.fonts_ready = false;
             self.fonts_set = false;
@@ -1163,7 +1261,7 @@ impl SheetApp {
             && self.editor.is_none()
             && self.text_box_editor.is_none()
             && now - self.grid.last_autosave > 2000.0
-            && self.session.active().is_some_and(|d| d.is_dirty() && d.path.as_deref().is_some_and(|p| p.ends_with(".xlsx")))
+            && self.session.active().is_some_and(|d| d.is_dirty() && d.pending.is_empty() && d.path.as_deref().is_some_and(|p| p.ends_with(".xlsx")))
         {
             self.grid.last_autosave = now;
             self.store_view_state();

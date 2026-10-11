@@ -1,10 +1,11 @@
 //! The browser shell: web `Services`, drag-and-drop, and the eframe web runner.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
+use std::collections::VecDeque;
 use std::rc::Rc;
 
 use gridcraft_engine::Session;
-use gridcraft_ui_egui::library::Library;
+use gridcraft_ui_egui::library::{Change, Library, Outcome, StoredRecord};
 use gridcraft_ui_egui::{Inbox, Services, SheetApp};
 use wasm_bindgen::JsCast as _;
 use wasm_bindgen::JsValue;
@@ -32,14 +33,14 @@ pub fn start() {
         let storage = if bridge.is_some() {
             None
         } else {
-            match crate::storage::open().await {
+            match crate::storage::open(crate::storage::DB_NAME).await {
             Ok(db) => {
                 let library = Rc::new(Library::new(js_sys::Date::now));
                 match crate::storage::load_all(&db).await {
                     Ok(entries) => library.restore(entries),
                     Err(e) => log::error!("couldn't read the workbooks saved in this browser: {e}"),
                 }
-                Some(Storage { library, db, errors: Rc::default() })
+                Some(Storage::new(library, db))
             }
                 Err(e) => {
                     log::warn!("browser storage is unavailable, so Save downloads: {e}");
@@ -70,6 +71,9 @@ pub fn start() {
                     }
                     let mut services = services(inbox.clone(), cc.egui_ctx.clone());
                     services.library = storage.as_ref().map(|s| s.library.clone());
+                    if let Some(storage) = &storage {
+                        storage.listen(&cc.egui_ctx);
+                    }
                     if let Some(bridge) = &app_bridge {
                         bridge.connect(&mut services, inbox.clone(), cc.egui_ctx.clone());
                     }
@@ -91,7 +95,9 @@ pub fn start() {
                         }
                         bridge.post_ready();
                     }
-                    Ok(Box::new(WebShell { app, inbox, bridge: app_bridge, storage }))
+                    // A host page guards leaving itself; standing alone, the browser asks first.
+                    let unsaved = if app_bridge.is_some() { Rc::default() } else { warn_before_unload() };
+                    Ok(Box::new(WebShell { app, inbox, bridge: app_bridge, storage, unsaved }))
                 }),
             )
             .await;
@@ -120,41 +126,108 @@ struct WebShell {
     inbox: Inbox,
     bridge: Option<crate::host::Bridge>,
     storage: Option<Storage>,
+    /// Mirrors [`SheetApp::has_unsaved_work`] for the `beforeunload` handler.
+    unsaved: Rc<Cell<bool>>,
 }
 
 /// The browser workbook library and the IndexedDB database it is written behind to.
+///
+/// Changes are applied by one worker at a time, in the order the library journaled them, and
+/// each outcome goes back to the app on the next frame ([`SheetApp::library_settled`]): only a
+/// committed transaction saves a workbook. Committed names are announced to other tabs on a
+/// `BroadcastChannel`; announcements from them update the library ([`Library::changed_elsewhere`]).
 struct Storage {
     library: Rc<Library>,
     db: web_sys::IdbDatabase,
-    /// Failed writes, reported in a message box on the next frame.
-    errors: Rc<RefCell<Vec<String>>>,
+    queue: Rc<RefCell<VecDeque<Change>>>,
+    busy: Rc<Cell<bool>>,
+    settled: Rc<RefCell<Vec<(Change, Outcome)>>>,
+    channel: Option<web_sys::BroadcastChannel>,
 }
 
 impl Storage {
-    /// Hands the library's pending changes to IndexedDB (one transaction per batch) and reports
-    /// writes that failed earlier.
+    fn new(library: Rc<Library>, db: web_sys::IdbDatabase) -> Storage {
+        let channel =
+            web_sys::BroadcastChannel::new(crate::storage::CHANNEL).map_err(|e| log::warn!("tabs can't tell each other about saves: {e:?}")).ok();
+        Storage { library, db, queue: Rc::default(), busy: Rc::default(), settled: Rc::default(), channel }
+    }
+
+    /// Reads back each workbook another tab announces and hands it to the library.
+    fn listen(&self, ctx: &egui::Context) {
+        let Some(channel) = &self.channel else { return };
+        let (db, library, ctx) = (self.db.clone(), self.library.clone(), ctx.clone());
+        let on_message = wasm_bindgen::closure::Closure::<dyn FnMut(web_sys::MessageEvent)>::new(move |event: web_sys::MessageEvent| {
+            let Some(name) = event.data().as_string() else { return };
+            let (db, library, ctx) = (db.clone(), library.clone(), ctx.clone());
+            wasm_bindgen_futures::spawn_local(async move {
+                match crate::storage::read(&db, &name).await {
+                    Ok(record) => {
+                        library.changed_elsewhere(&name, record);
+                        ctx.request_repaint();
+                    }
+                    Err(e) => log::warn!("couldn't read {name} after another tab saved it: {e}"),
+                }
+            });
+        });
+        channel.set_onmessage(Some(on_message.as_ref().unchecked_ref()));
+        // The listener lives as long as the page.
+        on_message.forget();
+    }
+
+    /// Reports finished changes to the app and queues the library's new ones for the worker.
     fn flush(&self, app: &mut SheetApp, ctx: &egui::Context) {
-        if let Some(e) = self.errors.borrow_mut().drain(..).next_back() {
-            app.message = Some((
-                "GridCraft".into(),
-                format!(
-                    "This browser didn't keep the latest changes to your saved workbooks ({e}). They are still open: download a copy with File › Save As."
-                ),
-            ));
+        let finished: Vec<(Change, Outcome)> = self.settled.borrow_mut().drain(..).collect();
+        for (change, outcome) in finished {
+            app.library_settled(&change, outcome);
         }
         let changes = self.library.take_changes();
         if changes.is_empty() {
             return;
         }
-        let (db, errors, ctx) = (self.db.clone(), self.errors.clone(), ctx.clone());
+        self.queue.borrow_mut().extend(changes);
+        if self.busy.replace(true) {
+            return;
+        }
+        let (db, queue, busy, settled, channel, ctx) =
+            (self.db.clone(), self.queue.clone(), self.busy.clone(), self.settled.clone(), self.channel.clone(), ctx.clone());
         wasm_bindgen_futures::spawn_local(async move {
-            if let Err(e) = crate::storage::persist(&db, changes).await {
-                log::error!("saving to browser storage failed: {e}");
-                errors.borrow_mut().push(e);
+            loop {
+                let next = queue.borrow_mut().pop_front();
+                let Some(change) = next else { break };
+                let outcome = match crate::storage::apply(&db, &change).await {
+                    Ok(crate::storage::Applied::Committed) => {
+                        if let Some(channel) = &channel {
+                            for name in change.names() {
+                                let _ = channel.post_message(&JsValue::from_str(name));
+                            }
+                        }
+                        Outcome::Committed
+                    }
+                    Ok(crate::storage::Applied::Conflict) => Outcome::Conflict(stored_now(&db, &change).await),
+                    Err(e) => {
+                        log::error!("saving to browser storage failed: {e}");
+                        Outcome::Failed(e, stored_now(&db, &change).await)
+                    }
+                };
+                settled.borrow_mut().push((change, outcome));
                 ctx.request_repaint();
             }
+            busy.set(false);
         });
     }
+}
+
+/// What storage holds under each name a refused change touched. A name that can't be read is
+/// left out, so the library keeps what it had rather than dropping the workbook.
+async fn stored_now(db: &web_sys::IdbDatabase, change: &Change) -> Vec<(String, Option<StoredRecord>)> {
+    let mut out = Vec::new();
+    for name in change.names() {
+        match crate::storage::read(db, name).await {
+            Ok(record) => out.push((name.to_string(), record)),
+            Err(e) => log::warn!("couldn't read {name} back from browser storage: {e}"),
+        }
+    }
+    out
 }
 
 impl eframe::App for WebShell {
@@ -193,6 +266,7 @@ impl eframe::App for WebShell {
         if let Some(storage) = &self.storage {
             storage.flush(&mut self.app, ui.ctx());
         }
+        self.unsaved.set(self.app.has_unsaved_work());
     }
 }
 
@@ -472,4 +546,25 @@ fn trigger_anchor_download(window: &web_sys::Window, name: &str, bytes: &[u8]) -
     });
     window.set_timeout_with_callback_and_timeout_and_arguments_0(revoke.unchecked_ref(), 10_000).map_err(js)?;
     Ok(())
+}
+
+/// Asks the browser to confirm before the tab closes or navigates away while the returned flag
+/// is set (unsaved work, or a write the browser hasn't confirmed). The handler lives as long as
+/// the page.
+fn warn_before_unload() -> Rc<Cell<bool>> {
+    let unsaved = Rc::new(Cell::new(false));
+    let Some(window) = web_sys::window() else { return unsaved };
+    let flag = unsaved.clone();
+    let handler = wasm_bindgen::closure::Closure::<dyn FnMut(web_sys::BeforeUnloadEvent)>::new(move |event: web_sys::BeforeUnloadEvent| {
+        if flag.get() {
+            event.prevent_default();
+            // Older browsers show the prompt only when a return value is set.
+            event.set_return_value("unsaved");
+        }
+    });
+    if let Err(e) = window.add_event_listener_with_callback("beforeunload", handler.as_ref().unchecked_ref()) {
+        log::warn!("can't warn before closing with unsaved work: {e:?}");
+    }
+    handler.forget();
+    unsaved
 }

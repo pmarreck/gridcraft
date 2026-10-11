@@ -776,6 +776,7 @@ impl Dialog {
             "pickList" => Dialog::custom("pickList", "Pick From List", json!({})),
             "saveCopy" => Dialog::custom("saveCopy", "Save a Copy", json!({"format": p("format")})),
             "saveChanges" => Dialog::custom("saveChanges", "Save Changes?", json!({"title": p("title")})),
+            "libraryConflict" => Dialog::custom("libraryConflict", "Changed in Another Tab", json!({"path": p("path")})),
             "start" => Dialog::custom("start", "GridCraft", json!({})),
             "comments" => {
                 app.grid.pane = None;
@@ -1196,7 +1197,42 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                             app.run_or_alert("file.save", json!({}));
                             if app.session.active().is_some_and(|x| !x.is_dirty()) {
                                 app.run_or_alert("file.close", json!({"force": true}));
+                            } else if let Some(d) = app.session.active().filter(|x| !x.pending.is_empty()) {
+                                // The browser hasn't stored it yet: close once it has.
+                                app.close_after_save.insert(d.uid);
                             }
+                            open = false;
+                        }
+                    });
+                }
+                // A workbook with unsaved changes here was saved by another tab (browser library).
+                "libraryConflict" => {
+                    let path = d.values.get("path").and_then(Json::as_str).unwrap_or_default().to_string();
+                    ui.label(format!("“{path}” was changed and saved in another tab, and you have unsaved changes here."));
+                    ui.horizontal(|ui| {
+                        if ui.button("Keep Mine").on_hover_text("Save your version over the other tab's").clicked() && app.commit_edit(0, 0, false, false) {
+                            if let Some(lib) = &app.services.library {
+                                lib.accept(&path);
+                            }
+                            app.run_or_alert("file.save", json!({}));
+                            open = false;
+                        }
+                        if ui.button("Use Theirs").on_hover_text("Discard your changes and open the other tab's version").clicked() {
+                            app.editor = None;
+                            let i = app.session.active_index();
+                            if let Err(e) = app.session.reload(i) {
+                                app.message = Some(("GridCraft".into(), crate::clean_error(&e.to_string())));
+                            }
+                            app.after_engine();
+                            open = false;
+                        }
+                        if ui.button("Save a Copy…").on_hover_text("Keep both: save your version under another name").clicked() {
+                            app.library_dismissed.insert(path.clone());
+                            open = false;
+                            app.open_backstage(crate::backstage::Page::SaveAs);
+                        }
+                        if ui.button("Cancel").clicked() {
+                            app.library_dismissed.insert(path.clone());
                             open = false;
                         }
                     });

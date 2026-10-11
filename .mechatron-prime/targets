@@ -10,6 +10,7 @@ checks.x86_64-linux.parity
 checks.x86_64-linux.scripts
 checks.x86_64-linux.cli
 checks.x86_64-linux.web
+checks.x86_64-linux.web-storage
 
 # The other four release targets (macOS on the native Apple Silicon builder).
 packages.x86_64-linux.aarch64-linux
