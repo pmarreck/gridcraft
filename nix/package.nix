@@ -75,6 +75,8 @@ let
     args
     // {
       inherit cargoArtifacts;
+      nativeBuildInputs =
+        args.nativeBuildInputs ++ lib.optionals platform.isDarwin [ pkgs.buildPackages.darwin.sigtool ];
       cargoExtraArgs = "--locked -p gridcraft -p gridcraft-cli";
       doCheck = false;
       postInstall = ''
@@ -125,6 +127,22 @@ let
           }; do
             file "$executable"
             file -b "$executable" | grep -E '${headerPattern}'
+          done
+        ''
+        # A Mac without Nix must be able to load every library the products name. Nixpkgs's
+        # libiconv is Apple's own (same compatibility version as the copy in every macOS), so
+        # point at the system one, then re-sign: arm64 macOS refuses binaries whose ad hoc
+        # signature no longer matches their load commands.
+        + lib.optionalString platform.isDarwin ''
+          for executable in "$out/bin/gridcraft-cli" "$out/Applications/GridCraft.app/Contents/MacOS/GridCraft"; do
+            for dylib in $(otool -L "$executable" | awk '$1 ~ "^/nix/store/.*/libiconv[.]2[.]dylib$" { print $1 }'); do
+              install_name_tool -change "$dylib" /usr/lib/libiconv.2.dylib "$executable"
+            done
+            codesign --force --sign - "$executable"
+            if otool -L "$executable" | tail -n +2 | grep -vE '^[[:space:]]+(/usr/lib/|/System/Library/)'; then
+              echo "$executable loads a library a stock Mac does not have" >&2
+              exit 1
+            fi
           done
         '';
       meta = {

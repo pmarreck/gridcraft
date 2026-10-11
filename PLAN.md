@@ -10,7 +10,8 @@
 - [x] Upstream sync cache under .git: default builds fetch+rebase when the last verified sync is >24 h old (fail before compiling if that fails); `--no-update` fails without a valid sync <24 h old; `--update` forces; HEAD must still contain the recorded upstream commit. Tests inject the clock and use real local Git remotes. (done 2026-10-11 14:00 EDT)
 - [x] Add `./build-all` (sole name, no underscore alias) for aarch64 macOS/Linux/Windows and x86_64 Linux/Windows; executables under `bin/<os>/<arch>/`. (done 2026-10-11 14:00 EDT)
 - [x] Built all five targets and inspected headers: x86_64/aarch64 Linux ELF, x86_64/ARM64 Windows PE32+ (GUI + console, .rsrc, real DLLs), arm64 macOS Mach-O min 14.0 via the remote Mac builder; launchers are native (done 2026-10-11 14:00 EDT)
-- [ ] macOS Nix products link /nix/store libiconv: relink to /usr/lib/libiconv.2.dylib and re-sign (ad hoc) so the .app runs on a Mac without Nix; verify with llvm-objdump --dylibs-used.
+- [x] macOS products load only /usr/lib and /System libraries: libiconv relinked to /usr/lib/libiconv.2.dylib and re-signed ad hoc, with a build gate; verified on a Mac with Apple codesign and by running both binaries. (2026-10-11 5:25 PM EDT)
+- [ ] Seal the GridCraft.app bundle signature (Apple codesign on a Mac; sigtool signs Mach-O files only). Pre-existing: `codesign --verify` on the bundle reports "code has no resources but signature indicates they must be present".
 - [x] Annotate new files and important directories with dirtree notes. (done 2026-10-11 14:00 EDT)
 - [x] Fork published (origin is the fork, upstream is storytold/gridcraft; branch `main`); Mechatron Prime CI webhook provisioned; first build of 33e9712 passed all 14 targets in 541 s, badge PASSING. (2026-10-11 3:36 PM EDT)
 - Keep local agent-instruction overrides and handoff notes out of the repository.
