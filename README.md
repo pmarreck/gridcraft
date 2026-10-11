@@ -101,6 +101,12 @@
 
 ## Quick start
 
+[![Mechatron Prime CI](https://img.shields.io/endpoint?url=https%3A%2F%2Fthelio-nixos.tail66c90.ts.net%2Fbadges%2Fgridcraft.json&style=for-the-badge)](https://thelio-nixos.tail66c90.ts.net/mechatron-prime/)
+
+This fork's continuous integration runs on Mechatron Prime CI, a self-hosted Nix build
+service: every push builds the flake targets listed in `.mechatron-prime/targets` (all of
+`./test`'s gates and the five release targets).
+
 With [Nix](https://nixos.org/download/) installed:
 
 ```sh

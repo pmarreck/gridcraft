@@ -1,0 +1,17 @@
+# Every ./test gate on the CI host.
+checks.x86_64-linux.build
+checks.x86_64-linux.test
+checks.x86_64-linux.clippy
+checks.x86_64-linux.fmt
+checks.x86_64-linux.assets
+checks.x86_64-linux.layers
+checks.x86_64-linux.wasm
+checks.x86_64-linux.parity
+checks.x86_64-linux.scripts
+checks.x86_64-linux.cli
+
+# The other four release targets (macOS on the native Apple Silicon builder).
+packages.x86_64-linux.aarch64-linux
+packages.x86_64-linux.x86_64-windows
+packages.x86_64-linux.aarch64-windows
+packages.x86_64-linux.aarch64-macos
