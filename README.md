@@ -157,6 +157,12 @@ cd apps/gridcraft-web && trunk serve --release     # http://127.0.0.1:8771  (?sa
 You need [trunk](https://trunkrs.dev) and the `wasm32-unknown-unknown` target. Open uses the
 browser's file picker (dropping files works too) and Save downloads the workbook.
 
+With Nix, `nix build .#web` builds the same site offline (Trunk with the wasm-bindgen CLI that
+matches `Cargo.lock`), and `./deploy-web` publishes it on the `gh-pages` branch of your fork
+for GitHub Pages. That branch holds only the built site; each deploy is one commit naming its
+source commit, an unchanged site is not redeployed, and the script refuses to publish to the
+upstream repository. Run `./deploy-web --help` for the options.
+
 ### Ribbon access keys
 
 Press and release **left Alt** on Windows/Linux/BSD, or press **F10** on any platform,

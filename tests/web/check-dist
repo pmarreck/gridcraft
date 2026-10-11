@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# Verify a built web distribution can be served from a subpath (GitHub Pages serves a fork at
+# /<repository>/): index.html exists, every asset it names is relative and present, and the
+# WebAssembly module is real.
+# Usage: tests/web/check-dist DIST_DIR
+set -u
+dist=${1:?usage: check-dist DIST_DIR}
+failures=0
+fail() { printf 'FAIL: %s\n' "$1" >&2; failures=$((failures + 1)); }
+pass() { printf 'ok: %s\n' "$1"; }
+
+index="$dist/index.html"
+if [[ -f $index ]]; then pass 'index.html exists'; else fail 'index.html exists'; exit 1; fi
+mapfile -t refs < <(grep -oE '(src|href)="[^"]+"|from '"'"'[^'"'"']+'"'"'|import\(["'"'"'][^"'"'"']+' "$index" \
+	| sed -E 's/^(src|href)="//; s/"$//; s/^from '"'"'//; s/'"'"'$//; s/^import\(["'"'"']//')
+if ((${#refs[@]})); then pass 'index.html names assets'; else fail 'index.html names assets'; fi
+saw_js=0
+for ref in "${refs[@]}"; do
+	case $ref in
+		http://* | https://* | data:*) continue ;;
+		/*) fail "asset path is absolute, so it breaks under a subpath: $ref" ;;
+	esac
+	path=${ref#./}
+	path=${path%%[?#]*}
+	[[ -f $dist/$path ]] || fail "missing asset: $ref"
+	[[ $path != *.js ]] || saw_js=1
+done
+if ((saw_js)); then pass 'index.html loads JavaScript glue'; else fail 'index.html loads JavaScript glue'; fi
+mapfile -t modules < <(find "$dist" -maxdepth 1 -name '*.wasm')
+if ((${#modules[@]} == 1)); then pass 'one WebAssembly module'; else fail "one WebAssembly module (found ${#modules[@]})"; fi
+for module in "${modules[@]}"; do
+	if [[ $(head -c 4 "$module" | od -An -tx1 | tr -d ' \n') == 0061736d ]]; then
+		pass "$(basename "$module") has the WebAssembly magic number"
+	else
+		fail "$(basename "$module") has the WebAssembly magic number"
+	fi
+done
+if ((failures)); then printf '%d web distribution check(s) failed\n' "$failures" >&2; exit 1; fi

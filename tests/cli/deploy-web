@@ -1,0 +1,129 @@
+#!/usr/bin/env bash
+# ./deploy-web's public behavior without a network or a compiler: a real fork with a local bare
+# "upstream" and a local bare "origin", a project path with spaces, a recording fake `nix` that
+# links a fixture site, and a fake `date` that sets the clock.
+# Checks pass expressions to eval in single quotes on purpose; they expand when run.
+# shellcheck disable=SC2016,SC2034
+set -u
+repo=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd) || exit 1
+scratch=$(mktemp -d "${TMPDIR:-/tmp}/gridcraft-deploy-web.XXXXXX") || exit 1
+trap 'rm -rf -- "$scratch"' EXIT
+failures=0
+pass() { printf 'ok: %s\n' "$1"; }
+fail() { printf 'FAIL: %s\n' "$1" >&2; [[ ! -s $scratch/err ]] || sed 's/^/    /' "$scratch/err" >&2; failures=$((failures + 1)); }
+run() { "$@" >"$scratch/out" 2>"$scratch/err"; status=$?; }
+expect_ok() { local label=$1; shift; run "$@"; if ((status == 0)); then pass "$label"; else fail "$label (exit $status)"; fi; }
+expect_fail() { local label=$1; shift; run "$@"; if ((status != 0)); then pass "$label"; else fail "$label (unexpectedly succeeded)"; fi; }
+check() { local label=$1; shift; if "$@"; then pass "$label"; else fail "$label"; fi; }
+err_has() { grep -q -- "$1" "$scratch/err"; }
+
+export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null
+export GIT_AUTHOR_NAME=Test GIT_AUTHOR_EMAIL=test@example.invalid
+export GIT_COMMITTER_NAME=Test GIT_COMMITTER_EMAIL=test@example.invalid
+# Never prompt for credentials; a regression must fail, not hang.
+export GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=false SSH_ASKPASS=false
+
+tools="$scratch/tools"
+mkdir -p "$tools"
+printf '#!%s\n' "$BASH" >"$tools/nix"
+cat >>"$tools/nix" <<'EOF'
+printf '%s\n' "$*" >>"$NIX_RECORD"
+link=
+while (($#)); do
+	[[ $1 != --out-link ]] || { shift; link=$1; }
+	shift
+done
+ln -sfn "$NIX_FIXTURE_OUTPUT" "$link"
+EOF
+printf '#!%s\n' "$BASH" >"$tools/date"
+printf 'printf "%%s\\n" "$FAKE_NOW"\n' >>"$tools/date"
+chmod +x "$tools/nix" "$tools/date"
+site="$scratch/site one"
+mkdir -p "$site"
+printf '<!doctype html><script type="module">import init from "./app.js";</script>\n' >"$site/index.html"
+printf 'export default 1;\n' >"$site/app.js"
+export PATH="$tools:$PATH" NIX_RECORD="$scratch/nix-record" NIX_FIXTURE_OUTPUT="$site" FAKE_NOW=1000000
+nix_calls() { [[ -f $NIX_RECORD ]] && wc -l <"$NIX_RECORD" | tr -d ' ' || echo 0; }
+
+# ---------------------------------------------------------------- informational flags
+expect_ok '--help' "$repo/deploy-web" --help
+check '--help names gh-pages and --about' eval 'grep -q gh-pages "$scratch/out" && grep -q -- --about "$scratch/out"'
+expect_ok '--version' "$repo/deploy-web" --version
+check '--version prints the workspace version' grep -qx '[0-9][0-9.]*[-0-9a-z.]*' "$scratch/out"
+expect_ok '--about' "$repo/deploy-web" --about
+check '--about is one line naming the machine' eval '[[ $(wc -l <"$scratch/out") -eq 1 ]] && grep -q "$(uname -m)" "$scratch/out"'
+expect_fail 'rejects an unknown option' "$repo/deploy-web" --frobnicate
+check '... naming it' err_has 'unknown option: --frobnicate'
+
+# ---------------------------------------------------------------- a fork with origin and upstream
+upstream="$scratch/upstream.git"
+origin="$scratch/origin.git"
+seed="$scratch/seed"
+project="$scratch/project with spaces"
+git init -q --bare -b main "$upstream"
+git init -q --bare -b main "$origin"
+git init -q -b main "$seed"
+printf 'base\n' >"$seed/shared"
+git -C "$seed" add shared && git -C "$seed" commit -qm base && git -C "$seed" push -q "$upstream" main
+git clone -q "$upstream" "$project"
+git -C "$project" remote rename origin upstream
+git -C "$project" remote add origin "$origin"
+mkdir -p "$project/scripts"
+cp "$repo/deploy-web" "$repo/Cargo.toml" "$project/"
+cp "$repo/scripts/build-common.sh" "$project/scripts/"
+git -C "$project" add . && git -C "$project" commit -qm 'fork: deploy script'
+git -C "$project" push -q origin main
+pages() { git -C "$origin" rev-parse --verify -q refs/heads/gh-pages; }
+
+# ---------------------------------------------------------------- deploy
+expect_ok 'first deploy syncs, builds and pushes gh-pages' "$project/deploy-web"
+check '... building the web package' grep -q '#packages\..*\.web ' "$NIX_RECORD"
+first=$(pages)
+check '... creating gh-pages on origin' test -n "$first"
+check '... containing the site' eval '[[ $(git -C "$origin" show gh-pages:index.html) == "$(cat "$site/index.html")" ]] && git -C "$origin" cat-file -e gh-pages:app.js'
+check '... with .nojekyll so Pages serves files as built' git -C "$origin" cat-file -e gh-pages:.nojekyll
+check '... and nothing else' eval '[[ $(git -C "$origin" ls-tree --name-only gh-pages | tr "\n" " ") == ".nojekyll app.js index.html " ]]'
+check '... naming the source commit' eval 'git -C "$origin" log -1 --format=%s gh-pages | grep -q "$(git -C "$project" rev-parse HEAD)"'
+check '... as a root commit, unrelated to main' eval '[[ -z $(git -C "$origin" log -1 --format=%P gh-pages) ]]'
+check '... leaving main untouched on origin' eval '[[ $(git -C "$origin" rev-parse main) == $(git -C "$project" rev-parse HEAD) ]]'
+
+expect_ok 'an unchanged site redeploys as a no-op' "$project/deploy-web"
+check '... keeping the same gh-pages commit' eval '[[ $(pages) == "$first" ]]'
+check '... saying so' err_has 'already deployed'
+
+printf 'export default 2;\n' >"$scratch/app2.js"
+site2="$scratch/site two"
+mkdir -p "$site2" && cp "$site/index.html" "$site2/" && cp "$scratch/app2.js" "$site2/app.js"
+NIX_FIXTURE_OUTPUT="$site2" expect_ok 'a changed site deploys a new commit' "$project/deploy-web"
+check '... whose parent is the previous deploy' eval '[[ $(git -C "$origin" log -1 --format=%P gh-pages) == "$first" ]]'
+check '... with the new content' eval '[[ $(git -C "$origin" show gh-pages:app.js) == "export default 2;" ]]'
+
+# ---------------------------------------------------------------- refusals
+calls=$(nix_calls)
+before=$(pages)
+printf 'local edit\n' >>"$project/shared"
+expect_fail 'uncommitted tracked changes are refused' "$project/deploy-web"
+check '... before building' test "$(nix_calls)" = "$calls"
+check '... saying why' err_has 'uncommitted changes'
+check '... keeping the edit' grep -q 'local edit' "$project/shared"
+git -C "$project" checkout -q -- shared
+
+# The upstream URL is rewritten to a local decoy, so even a broken guard cannot reach GitHub.
+decoy="$scratch/decoy.git"
+git init -q --bare -b main "$decoy"
+git -C "$project" config url."$decoy".insteadOf https://github.com/storytold/gridcraft.git
+git -C "$project" remote set-url origin https://github.com/storytold/gridcraft.git
+expect_fail 'a remote pointing at the upstream project is refused' "$project/deploy-web"
+check '... before building' test "$(nix_calls)" = "$calls"
+check '... saying why' err_has 'upstream'
+check '... and pushing nothing there' test -z "$(git -C "$decoy" for-each-ref)"
+git -C "$project" remote set-url origin "$origin"
+
+FAKE_NOW=$((1000000 + 86400)) expect_fail '--no-update after 24 h fails' "$project/deploy-web" --no-update
+check '... before building' test "$(nix_calls)" = "$calls"
+check '... leaving gh-pages alone' eval '[[ $(pages) == "$before" ]]'
+
+if ((failures)); then
+	printf '%d deploy-web check(s) failed\n' "$failures" >&2
+	exit 1
+fi

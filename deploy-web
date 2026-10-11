@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+set -u
+# shellcheck source=scripts/build-common.sh
+source "$(dirname "${BASH_SOURCE[0]}")/scripts/build-common.sh"
+update=auto
+remote=origin
+while (($#)); do
+	case "$1" in
+		-h|--help) cat <<'USAGE'
+Usage: ./deploy-web [--update|--no-update] [--remote NAME]
+
+Build the browser version of GridCraft through Nix and publish it on the remote's
+gh-pages branch, which GitHub Pages serves. The branch holds only the built site (plus
+.nojekyll); each deploy is one commit naming the source commit. Deploying an unchanged
+site is a no-op. The push never forces and never touches other branches.
+
+Like ./build, the branch is first kept rebased on upstream main (a verified sync is reused
+for 24 hours), and tracked files must be committed so the deploy names real source.
+
+  --update          Fetch and rebase now, even within 24 h of the last sync
+  --no-update       Never fetch; fail unless the last sync is under 24 h old
+  --remote NAME     Remote to publish to (default: origin); never the upstream project
+  --about           One-line description, version and platform
+  -V, --version     Print the version
+  -h, --help        Show this help
+USAGE
+			exit 0 ;;
+		--about) about deploy-web 'publish the GridCraft web build to GitHub Pages'; exit 0 ;;
+		-V|--version) printf '%s\n' "$GC_VERSION"; exit 0 ;;
+		--update) update=force ;;
+		--no-update) update=off ;;
+		--remote) shift; (($#)) || die '--remote requires a value'; remote=$1 ;;
+		--remote=*) remote=${1#--remote=} ;;
+		*) die "unknown option: $1 (see --help)" ;;
+	esac
+	shift
+done
+host_platform
+command -v nix >/dev/null || die 'Nix is required: https://nixos.org/download/'
+# Check the URL as configured and as rewritten by any insteadOf rule.
+configured=$(git_root config --get "remote.$remote.pushurl" || git_root config --get "remote.$remote.url") || die "no remote named $remote"
+url=$(git_root remote get-url --push "$remote") || die "no remote named $remote"
+for candidate in "$configured" "$url"; do
+	case "$candidate" in
+		*storytold/gridcraft | *storytold/gridcraft.git | *storytold/gridcraft/)
+			die "refusing to publish to the upstream project ($candidate); use your fork's remote" ;;
+	esac
+done
+[[ -z $(git_root status --porcelain --untracked-files=no) ]] || die 'tracked files have uncommitted changes; commit them so the deploy names its source'
+ensure_upstream "$update"
+source_commit=$(git_root rev-parse HEAD) || exit 1
+
+link="$GC_ROOT/.nix-out/web/release"
+mkdir -p "$(dirname "$link")" || exit 1
+nix_cmd build "$GC_ROOT#packages.$GC_SYSTEM.web" --out-link "$link" --print-build-logs || die 'the web build failed; nothing was published'
+
+# Stage the site in a scratch work tree and index, so the checkout and its index are untouched.
+scratch=$(mktemp -d "${TMPDIR:-/tmp}/gridcraft-deploy-web.XXXXXX") || exit 1
+trap 'rm -rf -- "$scratch"' EXIT
+mkdir -p "$scratch/site" && cp -R "$link/." "$scratch/site/" || exit 1
+chmod -R u+w "$scratch/site" || exit 1
+: >"$scratch/site/.nojekyll"
+export GIT_INDEX_FILE="$scratch/index"
+git_root --work-tree="$scratch/site" add --all --force . || exit 1
+tree=$(git_root write-tree) || exit 1
+unset GIT_INDEX_FILE
+
+parent=
+if git_root ls-remote --exit-code --heads "$remote" gh-pages >/dev/null; then
+	git_root fetch --quiet "$remote" "+refs/heads/gh-pages:refs/remotes/$remote/gh-pages" || die "could not fetch $remote gh-pages"
+	parent=$(git_root rev-parse --verify "refs/remotes/$remote/gh-pages^{commit}") || exit 1
+	if [[ $(git_root rev-parse "$parent^{tree}") == "$tree" ]]; then
+		note "The web build is already deployed on $remote gh-pages ($parent)."
+		exit 0
+	fi
+fi
+commit=$(git_root commit-tree "$tree" ${parent:+-p "$parent"} -m "Deploy web build of $source_commit") || exit 1
+git_root push --quiet "$remote" "$commit:refs/heads/gh-pages" || die "could not push gh-pages to $remote"
+note "Deployed the web build of $source_commit to $remote gh-pages ($commit)."

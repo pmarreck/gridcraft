@@ -125,6 +125,11 @@
         // lib.mapAttrs' (name: make: lib.nameValuePair "${name}-debug" (make "dev").package) targets
         // {
           default = (native system).package;
+          web = import ./nix/web.nix {
+            pkgs = pkgsFor system;
+            inherit crane;
+            src = rustSrc;
+          };
         }
       );
 
@@ -167,7 +172,9 @@
               cargoTestExtraArgs = "--no-fail-fast";
             }
           );
-          clippy = dev.craneLib.cargoClippy (common // { cargoClippyExtraArgs = "--all-targets -- -D warnings"; });
+          clippy = dev.craneLib.cargoClippy (
+            common // { cargoClippyExtraArgs = "--all-targets -- -D warnings"; }
+          );
           fmt = dev.craneLib.cargoFmt {
             src = rustSrc;
             pname = "gridcraft";
@@ -193,9 +200,25 @@
                 cd source
                 export HOME=$TMPDIR GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null
                 # The sandbox has no /usr/bin/env.
-                patchShebangs build build-all test tests/cli
-                shellcheck build build-all test scripts/build-common.sh tests/cli/build-scripts tests/cli/apps
+                patchShebangs build build-all deploy-web test tests/cli
+                shellcheck build build-all deploy-web test scripts/build-common.sh tests/cli/build-scripts tests/cli/deploy-web tests/cli/apps tests/web/check-dist
                 bash tests/cli/build-scripts
+                bash tests/cli/deploy-web
+                touch "$out"
+              '';
+          web =
+            pkgs.runCommand "gridcraft-web-dist-tests"
+              {
+                nativeBuildInputs = [
+                  pkgs.bash
+                  pkgs.coreutils
+                  pkgs.gnugrep
+                  pkgs.gnused
+                  pkgs.findutils
+                ];
+              }
+              ''
+                bash ${fullSrc}/tests/web/check-dist ${self.packages.${system}.web}
                 touch "$out"
               '';
           cli =
