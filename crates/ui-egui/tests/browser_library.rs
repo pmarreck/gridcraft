@@ -365,3 +365,22 @@ fn unsaved_work_is_reported_so_the_browser_can_warn_before_the_tab_closes() {
     assert!(h.state().editor.is_some());
     assert!(h.state().has_unsaved_work(), "a cell being typed");
 }
+
+#[test]
+fn a_download_is_a_copy_that_never_marks_the_workbook_saved() {
+    let (lib, mut h) = shared();
+    h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "2"})).unwrap();
+    choose(&mut h, "Save As");
+    click(&mut h, "Download (.xlsx)");
+    let d = h.state().session.active().unwrap();
+    assert!(d.is_dirty(), "the download is a copy; the browser library still has the old version");
+    assert_eq!(d.path.as_deref(), Some("Shared.xlsx"), "the workbook keeps its place in the library");
+    assert!(lib.take_changes().is_empty());
+    // A scripted save with an explicit path goes through the library, pending until confirmed.
+    let r = h.state_mut().run("file.save", serde_json::json!({"path": "Scripted.xlsx"})).unwrap();
+    assert_eq!(r["pending"], true);
+    assert!(h.state().session.active().unwrap().is_dirty());
+    persist(&mut h, &lib);
+    assert!(!h.state().session.active().unwrap().is_dirty());
+    assert_eq!(a1(&lib.read("Scripted.xlsx").unwrap()), Value::Number(2.0));
+}
