@@ -34,6 +34,7 @@ pub mod selection_glide;
 pub mod tabs;
 pub mod text_box;
 pub mod theme;
+pub mod touch;
 pub mod widgets;
 
 use std::collections::HashMap;
@@ -232,6 +233,11 @@ pub struct SheetApp {
     print_feedback_seen: Option<printing::Feedback>,
     /// Synthetic input from agents, one batch per frame (drags need several frames).
     pub synthetic: std::collections::VecDeque<Vec<egui::Event>>,
+    /// Turns touches into the clicks, wheel scrolling and zoom the widgets understand.
+    pub touch: touch::TouchTranslator,
+    /// The time the touch translator last ran, and when it next needs a frame.
+    touch_clock: f64,
+    touch_wake: Option<f64>,
     pub control_rx: Option<std::sync::mpsc::Receiver<ControlRequest>>,
     pub grid: grid::GridState,
     pub perf: Perf,
@@ -296,6 +302,9 @@ impl SheetApp {
             printing: Default::default(),
             print_feedback_seen: None,
             synthetic: Default::default(),
+            touch: Default::default(),
+            touch_clock: 0.0,
+            touch_wake: None,
             control_rx: None,
             grid: grid::GridState {
                 last_border: "bottom".into(),
@@ -1200,6 +1209,9 @@ impl SheetApp {
     }
 
     pub fn raw_input_hook(&mut self, raw: &mut egui::RawInput) {
+        // kittest leaves the time unset; egui then advances by the predicted frame time, as here.
+        self.touch_clock = raw.time.unwrap_or(self.touch_clock + f64::from(raw.predicted_dt));
+        self.touch_wake = self.touch.translate(self.touch_clock, &mut raw.events);
         if let Some(mut batch) = self.synthetic.pop_front() {
             raw.events.append(&mut batch);
         }
@@ -1242,6 +1254,9 @@ impl SheetApp {
                 grid::show(self, ui);
                 self.perf.grid_ms = now_ms() - g0;
             });
+        }
+        if let Some(wait) = self.touch_wake {
+            ctx.request_repaint_after(std::time::Duration::from_secs_f64(wait));
         }
         dialogs::show(self, &ctx);
         widgets::message_box(self, &ctx);

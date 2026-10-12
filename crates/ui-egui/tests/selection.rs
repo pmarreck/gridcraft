@@ -120,6 +120,35 @@ fn clicking_then_hovering_does_not_extend_selection() {
 }
 
 #[test]
+fn a_click_then_a_quick_press_and_drag_selects_instead_of_editing() {
+    // Only a second click is a double-click; a press that becomes a drag selects (touch sends
+    // exactly this for a tap followed by a drag).
+    let mut h = harness("A1");
+    let from = point(&h, "C3");
+    press(&mut h, "C3");
+    frame(&mut h, button(from, false));
+    frame(&mut h, button(from, true));
+    let to = point(&h, "F7");
+    frame(&mut h, Event::PointerMoved(to));
+    frame(&mut h, button(to, false));
+    assert!(h.state().editor.is_none(), "no in-cell editor");
+    assert_selection(&h, "C3", "F7");
+}
+
+#[test]
+fn a_double_click_edits_even_when_the_second_press_is_the_next_frame() {
+    // egui draws only on input, so with no movement between the clicks the frame after the
+    // first release is the second press (always so for a touch double-tap).
+    let mut h = harness("A1");
+    let at = point(&h, "C3");
+    press(&mut h, "C3");
+    frame(&mut h, button(at, false));
+    frame(&mut h, button(at, true));
+    frame(&mut h, button(at, false));
+    assert!(h.state().editor.is_some(), "the in-cell editor opened");
+}
+
+#[test]
 fn formula_point_mode_consumes_first_movement_and_release() {
     let mut h = harness("A1");
     let before = cells(&h);

@@ -18,6 +18,11 @@
 - Standing policy (approved 2026-10-11): after the daily sync rebases `main`, publish it to the fork only with `git push --force-with-lease=main:<previous origin sha> origin main`, and only after a green `./test`. Never push to the upstream repository.
 
 ## Web application
+- [ ] Mobile: responsive layout and touch, decided by BDFN 2026-10-12. Touch gestures live in ui-egui and react only to real touch events, so mouse and trackpad are unchanged and native touchscreens benefit too.
+	- [x] Touch translator (2026-10-12 5:00 PM EDT): `touch.rs` rewrites raw input before egui sees it, so every widget reacts through its mouse code. A tap clicks; tap then an immediate press holds the button (drag selects, lift double-clicks and edits); one finger scrolls via wheel events, with momentum; two fingers scroll and pinch-zoom; long press right-clicks. Scrolling keeps the pointer where the touch began. Fixed two grid bugs it exposed: a press that becomes a drag no longer counts as a double-click, and a second press on the very next frame is no longer ignored.
+	- [ ] Tune thresholds on a real device (tap slop 10 pt, tap-then-drag window 0.3 s and 30 pt, long press 0.5 s, momentum time constant 0.325 s).
+	- [ ] Compact layout below a width breakpoint: ribbon tab strip plus one horizontally scrolling row of larger buttons, status bar hidden, formula bar and sheet tabs kept, dialogs fit the width, tap targets at least 44 px. Show BDFN a phone-width snapshot before encoding it in tests.
+	- [ ] Real-device check on a phone and a tablet.
 
 - [x] Web build in Nix (`nix build .#web`, gated by `checks.web`) and `./deploy-web` publishing to the fork's gh-pages branch for GitHub Pages. Upstream's web app already opens local files (picker or drop) and Save downloads (exports) the workbook. (2026-10-11 5:25 PM EDT)
 - [x] Web: browser storage as the filesystem. The engine reads and writes through an optional `FileStore`; the browser library (`crates/ui-egui/src/library.rs`) mirrors IndexedDB with a write-behind journal. Save offers "In this browser" or a download; Ctrl+S and AutoSave write to the library; File › Open lists stored workbooks (open, rename, delete) and imports local files. (2026-10-11 7:00 PM EDT)

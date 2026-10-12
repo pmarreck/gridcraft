@@ -1783,6 +1783,12 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
     // Enter/Space synthesize egui clicks; only real pointer clicks use sheet coordinates.
     let primary_clicked = resp.clicked_by(egui::PointerButton::Primary);
     let pointer = ctx.input(|i| i.pointer.clone());
+    // A click leaves `Drag::Select` set until a frame with no button down clears it. egui draws
+    // only on input, so a second press can be the very next frame (a touch double-tap always
+    // is); a new press ends that leftover, or the second click would be ignored.
+    if pointer.primary_pressed() && app.grid.drag == Drag::Select {
+        app.grid.drag = Drag::None;
+    }
     let mods = ctx.input(|i| i.modifiers);
     // Hit-testing works in logical coordinates (see `Geo::rtl`).
     let pos = pointer.interact_pos().or(pointer.hover_pos()).map(|p| geo.mirror_pos(p));
@@ -2095,9 +2101,11 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
             app.grid.drag = Drag::Move { grab: c, to: None };
             return;
         }
-        // Double-click edits.
+        // Double-click edits. Only a second click counts: a press that became a drag selects
+        // (a touch tap followed by a drag arrives exactly so).
         let now = crate::now_ms();
         if let Some((last, at)) = app.grid.last_click
+            && primary_clicked
             && last == c
             && now - at < 450.0
             && !mods.shift
