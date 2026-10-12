@@ -7,7 +7,8 @@
 //! Differences from the desktop app: no TCP control channel; workbooks are saved in a library in
 //! the browser's IndexedDB (`storage`, mirrored by `gridcraft_ui_egui::library`) or downloaded;
 //! files from the computer are imported with the browser file picker or by dropping them (bytes
-//! arrive asynchronously through `Services::inbox`).
+//! arrive asynchronously through `Services::inbox`). Fonts the site serves (`site_fonts`) are
+//! fetched when a workbook uses them.
 //!
 //! URL query flags: `?webgl` forces WebGL2; `?sample=sales|budget|grades` opens a sample;
 //! `?host=parent` (inside an `<iframe>`) talks to a same-origin parent page instead: it sends the
@@ -17,6 +18,8 @@
 
 #[cfg(target_arch = "wasm32")]
 mod host;
+#[cfg(target_arch = "wasm32")]
+mod site_fonts;
 #[cfg(target_arch = "wasm32")]
 mod storage;
 #[cfg(target_arch = "wasm32")]

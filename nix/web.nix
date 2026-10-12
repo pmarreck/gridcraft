@@ -30,13 +30,8 @@ let
     cargoExtraArgs = "--locked -p gridcraft-web";
     doCheck = false;
   };
-  testArgs = args // {
-    pname = "gridcraft-web-storage-tests";
-    doCheck = true;
-  };
-in
-{
-  site = craneLib.buildTrunkPackage (
+  # The app alone; `site` adds the fonts, so changing the font set never rebuilds the app.
+  app = craneLib.buildTrunkPackage (
     args
     // {
       inherit wasm-bindgen-cli;
@@ -50,6 +45,18 @@ in
       '';
     }
   );
+  testArgs = args // {
+    pname = "gridcraft-web-storage-tests";
+    doCheck = true;
+  };
+in
+{
+  # The site: the app plus the self-hosted fonts it fetches on demand (nix/web-fonts.nix).
+  site = pkgs.runCommand "gridcraft-web-${version}" { } ''
+    cp -r ${app} "$out"
+    chmod u+w "$out"
+    cp -r ${import ./web-fonts.nix { inherit pkgs; }} "$out/fonts"
+  '';
 
   # The IndexedDB layer's tests, run in headless Chromium through wasm-bindgen-test-runner.
   # Linux only: nixpkgs has no Chromium for macOS.

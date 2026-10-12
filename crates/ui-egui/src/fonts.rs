@@ -19,13 +19,22 @@ use std::sync::OnceLock;
 #[cfg(not(target_arch = "wasm32"))]
 const MAX_FONT_FILE: u64 = 64 << 20;
 
+/// Where a face's font data lives.
+#[derive(Clone, Debug)]
+pub enum Source {
+    /// An installed font file, read when the family is bound.
+    File(PathBuf),
+    /// Bytes already in memory (a font fetched by the web build).
+    Bytes(std::sync::Arc<[u8]>),
+}
+
 /// One face of one installed font file.
 #[derive(Clone, Debug)]
 pub struct Face {
     /// Typographic family name, e.g. `"Segoe UI"`.
     pub family: String,
-    /// The file the face lives in.
-    pub path: PathBuf,
+    /// Where the face's bytes come from.
+    pub source: Source,
     /// Face index within the file (collections hold several, e.g. a family's Regular and Bold).
     pub index: u32,
     /// Weight implied by the face's style name (400 = regular).
@@ -144,7 +153,7 @@ pub fn scan_dirs(dirs: &[PathBuf]) -> Vec<Face> {
             }
             let Ok(data) = std::fs::read(&path) else { continue };
             for (index, family, style) in file_faces(&data) {
-                out.push(Face { family, path: path.clone(), index, weight: style_weight(&style), italic: style_italic(&style) });
+                out.push(Face { family, source: Source::File(path.clone()), index, weight: style_weight(&style), italic: style_italic(&style) });
             }
         }
     }
@@ -180,6 +189,10 @@ pub fn start_scan() {
                 catalog();
             });
         }
+        // No font folders to scan: the (empty) catalog is complete at once, so workbook fonts
+        // fetched by the web build get bound.
+        #[cfg(target_arch = "wasm32")]
+        catalog();
     });
 }
 
@@ -188,18 +201,21 @@ pub fn scan_done() -> bool {
     CATALOG.get().is_some()
 }
 
-/// The faces of one installed family, regular-weight first (the order roles pick from).
+/// The faces of one family, regular-weight first (the order roles pick from): the installed faces,
+/// or else the fetched faces of the offered family the name resolves to (see [`crate::font_offer`]).
 pub fn faces_of(family: &str) -> Vec<Face> {
-    let Some(cat) = catalog_now() else { return Vec::new() };
-    let mut v: Vec<Face> = cat.iter().filter(|f| f.family.eq_ignore_ascii_case(family)).cloned().collect();
+    let installed: Vec<Face> =
+        catalog_now().map(|cat| cat.iter().filter(|f| f.family.eq_ignore_ascii_case(family)).cloned().collect()).unwrap_or_default();
+    let mut v = if installed.is_empty() { crate::font_offer::loaded_faces_for(family) } else { installed };
     v.sort_by(|a, b| a.weight.total_cmp(&b.weight).then(a.italic.cmp(&b.italic)).then(a.index.cmp(&b.index)));
     v
 }
 
-/// The subset of `names` that is installed, sorted and deduped. These are the families whose files
-/// get bound for a workbook.
+/// The subset of `names` that is installed or fetched, sorted and deduped. These are the families
+/// whose faces get bound for a workbook. An installed family keeps the catalog's spelling; a fetched
+/// one keeps the workbook's, since an alias ("Calibri" served by Carlito) binds under that name.
 pub fn installed_among(names: &[String]) -> Vec<String> {
-    let Some(cat) = catalog_now() else { return Vec::new() };
+    let cat = catalog_now().unwrap_or_default();
     let mut out: Vec<String> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
     for wanted in names {
@@ -208,6 +224,8 @@ pub fn installed_among(names: &[String]) -> Vec<String> {
         }
         if let Some(f) = cat.iter().find(|f| f.family.eq_ignore_ascii_case(wanted)) {
             out.push(f.family.clone());
+        } else if !crate::font_offer::loaded_faces_for(wanted).is_empty() {
+            out.push(wanted.clone());
         }
     }
     out.sort_by_key(|a| a.to_lowercase());
@@ -215,16 +233,16 @@ pub fn installed_among(names: &[String]) -> Vec<String> {
 }
 
 /// The font list a combo box shows: the standard [`crate::ribbon::FONTS`] names first (what Excel
-/// offers, and what we substitute), then every other installed family A–Z. Never blocks: until the
-/// background scan finishes it returns just the standard names.
+/// offers, and what we substitute), then every other installed or offered family A–Z. Never blocks:
+/// until the background scan finishes it lists no installed families.
 pub fn families() -> Vec<String> {
     let mut out: Vec<String> = crate::ribbon::FONTS.iter().map(|s| s.to_string()).collect();
-    let Some(cat) = catalog_now() else { return out };
     let mut seen: HashSet<String> = out.iter().map(|s| s.to_lowercase()).collect();
-    let mut installed: Vec<String> = cat.iter().map(|f| f.family.clone()).collect();
-    installed.sort_by_key(|a| a.to_lowercase());
-    installed.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
-    for f in installed {
+    let mut more: Vec<String> = catalog_now().unwrap_or_default().iter().map(|f| f.family.clone()).collect();
+    more.extend(crate::font_offer::offered_families());
+    more.sort_by_key(|a| a.to_lowercase());
+    more.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
+    for f in more {
         if seen.insert(f.to_lowercase()) {
             out.push(f);
         }
@@ -256,8 +274,14 @@ fn pick_face(faces: &[Face], bold: bool, italic: bool) -> Option<&Face> {
 
 /// A stable key for a face's font data, unique per file/index within the process.
 fn face_key(family: &str, face: &Face) -> String {
-    let file = face.path.file_name().and_then(|s| s.to_str()).unwrap_or("font");
-    format!("fnt-src:{family}:{file}:{}", face.index)
+    match &face.source {
+        Source::File(path) => {
+            let file = path.file_name().and_then(|s| s.to_str()).unwrap_or("font");
+            format!("fnt-src:{family}:{file}:{}", face.index)
+        }
+        // Keyed by the face's own family, so the names it stands in for share one copy of the data.
+        Source::Bytes(_) => format!("fnt-mem:{}:{}:{}", face.family, face.weight, if face.italic { 'i' } else { 'n' }),
+    }
 }
 
 /// Bind one installed family's faces into `fonts`, one egui family per cell role, and return the
@@ -282,7 +306,13 @@ pub fn bind_faces(fonts: &mut egui::FontDefinitions, family: &str, faces: &[Face
             if chain.contains(&key) {
                 continue;
             }
-            let Ok(bytes) = std::fs::read(&face.path) else { continue };
+            let bytes = match &face.source {
+                Source::File(path) => match std::fs::read(path) {
+                    Ok(bytes) => bytes,
+                    Err(_) => continue,
+                },
+                Source::Bytes(bytes) => bytes.to_vec(),
+            };
             let mut fd = egui::FontData::from_owned(bytes);
             fd.index = face.index;
             fonts.font_data.entry(key.clone()).or_insert_with(|| std::sync::Arc::new(fd));
@@ -407,7 +437,7 @@ mod tests {
         std::fs::create_dir_all(&dir).expect("temp dir");
         let path = dir.join("Ubuntu-Light.ttf");
         std::fs::write(&path, epaint_default_fonts::UBUNTU_LIGHT).expect("write");
-        let face = Face { family: "Ubuntu".into(), path, index: 0, weight: 300.0, italic: false };
+        let face = Face { family: "Ubuntu".into(), source: Source::File(path), index: 0, weight: 300.0, italic: false };
 
         let mut fonts = egui::FontDefinitions::default();
         let bound = bind_faces(&mut fonts, "Ubuntu", std::slice::from_ref(&face));

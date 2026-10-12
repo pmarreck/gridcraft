@@ -14,6 +14,7 @@ pub mod control;
 pub mod credits;
 pub mod dialogs;
 pub mod editor;
+pub mod font_offer;
 pub mod fonts;
 pub mod formula_bar;
 mod formula_locale;
@@ -236,11 +237,11 @@ pub struct SheetApp {
     pub perf: Perf,
     pub fonts_ready: bool,
     fonts_set: bool,
-    /// Workbook fonts bound into the current font set; a change rebinds (installed fonts only).
+    /// Workbook fonts bound into the current font set; a change rebinds (installed or fetched fonts).
     fonts_bound: Vec<String>,
-    /// The (doc uid, revision) `fonts_bound` was computed for, so the style table is walked only
-    /// when the workbook changes.
-    fonts_seen: (u64, u64),
+    /// The (doc uid, revision, fetched-font generation) `fonts_bound` was computed for, so the
+    /// style table is walked only when the workbook or the fetched fonts change.
+    fonts_seen: (u64, u64, u64),
     /// Set while a font-set change is pending activation: skip this frame's paint, like the
     /// startup `fonts_ready` gate (egui applies new definitions at the next pass).
     fonts_rebind: bool,
@@ -306,7 +307,7 @@ impl SheetApp {
             fonts_ready: false,
             fonts_set: false,
             fonts_bound: Vec::new(),
-            fonts_seen: (0, 0),
+            fonts_seen: (0, 0, 0),
             fonts_rebind: false,
             fonts_han: None,
             effective_dark: false,
@@ -1117,7 +1118,7 @@ impl SheetApp {
                 self.fonts_set = true;
                 // The rebuilt set has no workbook fonts yet: bind them again once it is active.
                 self.fonts_bound.clear();
-                self.fonts_seen = (0, 0);
+                self.fonts_seen = (0, 0, 0);
                 self.fonts_han = Some(theme::HanOrder::of(self.ui.language));
                 ctx.request_repaint();
             }
@@ -1127,12 +1128,15 @@ impl SheetApp {
         } else if fonts::scan_done() {
             // Bind the workbook's installed fonts once the background scan has finished. Adding
             // fonts re-applies the font set, which egui activates at the next pass, so skip this
-            // frame's paint (same one-frame cost as startup). Only when the workbook changed.
-            let seen = self.session.active().map(|d| (d.uid, d.revision)).unwrap_or((0, 0));
+            // frame's paint (same one-frame cost as startup). Only when the workbook changed, or
+            // when fonts fetched by the web build arrived (the same names now bind to new data).
+            let generation = font_offer::generation();
+            let seen = self.session.active().map(|d| (d.uid, d.revision, generation)).unwrap_or((0, 0, generation));
             if seen != self.fonts_seen {
                 let used = self.used_fonts();
+                let fetched = seen.2 != self.fonts_seen.2;
                 self.fonts_seen = seen;
-                if used != self.fonts_bound {
+                if used != self.fonts_bound || fetched {
                     ctx.set_fonts(theme::font_definitions_with(self.ui.language, &used));
                     self.fonts_bound = used;
                     self.fonts_rebind = true;

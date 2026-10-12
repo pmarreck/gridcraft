@@ -42,3 +42,19 @@ Generated-in-code art is original and has no file to list: the UI icon set (`cra
 | `docs/images/pivot.png` | GridCraft contributors | screenshot of GridCraft rendered offscreen (`crates/ui-egui/examples/snapshot.rs`) showing an original sample workbook | MIT OR Apache-2.0 | README screenshot; no third-party content |
 | `docs/images/format-chart.png` | GridCraft contributors | screenshot of GridCraft rendered offscreen (`crates/ui-egui/examples/snapshot.rs`) showing an original sample workbook | MIT OR Apache-2.0 | README screenshot; no third-party content |
 | `docs/images/page-break.png` | GridCraft contributors | screenshot of GridCraft rendered offscreen (`crates/ui-egui/examples/snapshot.rs`) showing an original sample workbook | MIT OR Apache-2.0 | README screenshot; no third-party content |
+
+## Fonts served by the web build
+
+None of these font files are in this repository. `nix build .#web` copies them from pinned nixpkgs packages into the site's `fonts/` folder, together with each family's licence and a `fonts/manifest.json` (`nix/web-fonts.nix`). The browser app fetches a family only when a workbook uses it, either by its own name or by a font it stands in for with matching metrics. Each family has four static faces: regular, bold, italic and bold italic.
+
+| Family | Stands in for | Author | nixpkgs package | Licence |
+|---|---|---|---|---|
+| Carlito | Calibri | Łukasz Dziedzic (tyPoland) | `carlito` | SIL OFL 1.1 |
+| Caladea | Cambria | Huerta Tipografía | `caladea` | Apache-2.0 |
+| Liberation Sans | Arial, Helvetica | Red Hat (digitized data: Google) | `liberation_ttf` | SIL OFL 1.1 |
+| Liberation Serif | Times New Roman, Times | Red Hat (digitized data: Google) | `liberation_ttf` | SIL OFL 1.1 |
+| Liberation Mono | Courier New, Courier | Red Hat (digitized data: Google) | `liberation_ttf` | SIL OFL 1.1 |
+| Gelasio | Georgia | Eben Sorkin | `gelasio` | SIL OFL 1.1 |
+| Lato | — | Łukasz Dziedzic | `lato` | SIL OFL 1.1 |
+| Source Sans 3 | — | Adobe | `source-sans` | SIL OFL 1.1 |
+| Merriweather | — | Eben Sorkin (Sorkin Type) | `merriweather` | SIL OFL 1.1 |

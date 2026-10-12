@@ -173,6 +173,14 @@ version; one with unsaved changes asks whether to keep this version, use the oth
 save a copy under a new name. The IndexedDB layer's tests run in headless Chromium
 (`nix build .#checks.x86_64-linux.web-storage`).
 
+A browser has no font folders for GridCraft to read, so the site serves its own fonts under
+open licenses (`nix/web-fonts.nix`; the families and their licenses are listed in
+[ATTRIBUTION.md](ATTRIBUTION.md)). The font list offers them, and a family is downloaded only
+when a workbook uses it. Several stand in for common Office fonts with the same metrics, so a
+workbook keeps its layout: Carlito for Calibri, Caladea for Cambria, Liberation Sans, Serif and
+Mono for Arial, Times New Roman and Courier New, and Gelasio for Georgia. A site built without
+fonts still works and uses egui's built-in fonts.
+
 With Nix, `nix build .#web` builds the same site offline (Trunk with the wasm-bindgen CLI that
 matches `Cargo.lock`), and `./deploy-web` publishes it on the `gh-pages` branch of your fork
 for GitHub Pages. That branch holds only the built site; each deploy is one commit naming its

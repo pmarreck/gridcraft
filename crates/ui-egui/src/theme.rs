@@ -727,6 +727,35 @@ mod font_binding_tests {
     }
 
     #[test]
+    fn a_loaded_offered_font_binds_under_the_name_it_stands_in_for() {
+        let _g = crate::fonts::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        use crate::font_offer;
+        font_offer::reset();
+        let manifest = r#"{"families":[{"family":"Carlito","aliases":["Calibri"],"faces":[{"file":"Carlito/Carlito-Regular.ttf"}]}]}"#;
+        font_offer::offer(font_offer::parse_manifest(manifest).expect("manifest"));
+        let used = vec!["Calibri".to_string(), "Carlito".to_string()];
+        // Offered but not fetched yet: nothing to bind, so Calibri keeps its built-in role.
+        font_definitions_with(crate::i18n::Language::En, &used);
+        assert_eq!(cell_family("Calibri", false, false), FontFamily::Name(CELL.into()));
+
+        font_offer::add_loaded("Carlito", vec![(epaint_default_fonts::UBUNTU_LIGHT.to_vec(), 400.0, false)]);
+        let fonts = font_definitions_with(crate::i18n::Language::En, &used);
+        for name in ["Calibri", "Carlito"] {
+            for (b, i) in [(false, false), (true, false), (false, true), (true, true)] {
+                let role = crate::fonts::role_key(name, b, i);
+                assert_eq!(cell_family(name, b, i), FontFamily::Name(role.as_str().into()), "{name} {b} {i}");
+                let chain = fonts.families.get(&FontFamily::Name(role.as_str().into())).expect("bound family");
+                assert!(chain.first().is_some_and(|k| k.starts_with("fnt-mem:Carlito:")), "{role}: {chain:?}");
+                assert!(chain.iter().all(|k| fonts.font_data.contains_key(k)), "every chained key has data");
+            }
+        }
+        assert_eq!(fonts.font_data.keys().filter(|k| k.starts_with("fnt-mem:")).count(), 1, "Calibri and Carlito share one copy");
+        assert!(crate::fonts::families().iter().any(|f| f == "Carlito"), "the font list offers it");
+        font_offer::reset();
+        crate::fonts::set_bound(always_bound());
+    }
+
+    #[test]
     fn a_name_that_is_not_an_installed_font_gets_a_built_in_role() {
         let _g = crate::fonts::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // Nothing installed: every name buckets to a role that font_definitions bound.

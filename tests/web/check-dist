@@ -35,4 +35,30 @@ for module in "${modules[@]}"; do
 		fail "$(basename "$module") has the WebAssembly magic number"
 	fi
 done
+# Self-hosted fonts: the manifest exists and every font and licence it names is served, and every
+# font file is an sfnt (TrueType or OpenType) that egui can read, never WOFF.
+manifest="$dist/fonts/manifest.json"
+if [[ -f $manifest ]]; then pass 'fonts/manifest.json exists'; else fail 'fonts/manifest.json exists'; fi
+if [[ -f $manifest ]]; then
+	mapfile -t font_files < <(grep -oE '"file":"[^"]+"' "$manifest" | sed -E 's/^"file":"//; s/"$//')
+	mapfile -t licences < <(grep -oE '"license":"[^"]+"' "$manifest" | sed -E 's/^"license":"//; s/"$//')
+	families=$(grep -oE '"family":"[^"]+"' "$manifest" | wc -l)
+	if ((${#font_files[@]} > 0)); then pass "the manifest lists ${#font_files[@]} font files"; else fail 'the manifest lists font files'; fi
+	if ((families > 0 && ${#licences[@]} == families)); then pass "each of $families families names its licence"; else fail "each family names its licence ($families families, ${#licences[@]} licences)"; fi
+	for file in "${font_files[@]}" "${licences[@]}"; do
+		case $file in
+			/* | *..* | *:*) fail "font path leaves the font folder: $file" ;;
+		esac
+		[[ -s $dist/fonts/$file ]] || fail "missing font asset: fonts/$file"
+	done
+	bad=0
+	for file in "${font_files[@]}"; do
+		[[ -f $dist/fonts/$file ]] || continue
+		case $(head -c 4 "$dist/fonts/$file" | od -An -tx1 | tr -d ' \n') in
+			00010000 | 4f54544f) ;;
+			*) fail "not a TrueType/OpenType font: fonts/$file"; bad=1 ;;
+		esac
+	done
+	((bad)) || pass 'every served font is TrueType or OpenType'
+fi
 if ((failures)); then printf '%d web distribution check(s) failed\n' "$failures" >&2; exit 1; fi

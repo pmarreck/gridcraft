@@ -95,9 +95,10 @@ pub fn start() {
                         }
                         bridge.post_ready();
                     }
+                    crate::site_fonts::offer(cc.egui_ctx.clone());
                     // A host page guards leaving itself; standing alone, the browser asks first.
                     let unsaved = if app_bridge.is_some() { Rc::default() } else { warn_before_unload() };
-                    Ok(Box::new(WebShell { app, inbox, bridge: app_bridge, storage, unsaved }))
+                    Ok(Box::new(WebShell { app, inbox, bridge: app_bridge, storage, unsaved, fonts_seen: None }))
                 }),
             )
             .await;
@@ -128,6 +129,9 @@ struct WebShell {
     storage: Option<Storage>,
     /// Mirrors [`SheetApp::has_unsaved_work`] for the `beforeunload` handler.
     unsaved: Rc<Cell<bool>>,
+    /// The (doc uid, revision, font generation) whose fonts were last requested, so the style
+    /// table is walked only when something changed.
+    fonts_seen: Option<(u64, u64, u64)>,
 }
 
 /// The browser workbook library and the IndexedDB database it is written behind to.
@@ -251,6 +255,7 @@ impl eframe::App for WebShell {
         if let Some(storage) = &self.storage {
             storage.flush(&mut self.app, ctx);
         }
+        self.fetch_fonts(ctx);
     }
 
     fn raw_input_hook(&mut self, _ctx: &egui::Context, raw: &mut egui::RawInput) {
@@ -567,4 +572,19 @@ fn warn_before_unload() -> Rc<Cell<bool>> {
     }
     handler.forget();
     unsaved
+}
+
+impl WebShell {
+    /// Fetch the served fonts the active workbook uses and has not asked for yet.
+    fn fetch_fonts(&mut self, ctx: &egui::Context) {
+        let generation = gridcraft_ui_egui::font_offer::generation();
+        let seen = self.app.session.active().map(|d| (d.uid, d.revision, generation)).unwrap_or((0, 0, generation));
+        if self.fonts_seen == Some(seen) {
+            return;
+        }
+        self.fonts_seen = Some(seen);
+        for family in gridcraft_ui_egui::font_offer::take_wanted(&self.app.used_fonts()) {
+            crate::site_fonts::fetch(family, ctx.clone());
+        }
+    }
 }
