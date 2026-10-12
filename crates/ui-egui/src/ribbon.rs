@@ -33,6 +33,8 @@ pub const TITLE_LEFT_PAD: f32 = if MAC { MAC_CONTENT_LEFT } else { 8.0 };
 const TITLE_BAR_H: f32 = if MAC { MAC_TITLE_BAR } else { 38.0 };
 /// The tallest title-bar controls, smaller on macOS to keep a margin in the shorter bar.
 const TITLE_CONTROL_H: f32 = if MAC { 22.0 } else { 26.0 };
+/// The least space (points) between the workbook title and the buttons either side of it.
+const TITLE_GAP: f32 = 8.0;
 const _: () = assert!(TITLE_CONTROL_H < TITLE_BAR_H, "title-bar controls keep a margin above and below");
 
 pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
@@ -51,18 +53,22 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
         }
         ui.horizontal_centered(|ui| {
             ui.add_space(TITLE_LEFT_PAD);
-            // AutoSave toggle (saves after each change when the workbook has a file).
-            ui.label(egui::RichText::new("AutoSave").font(theme::ui_font(12.5)).color(t.text_dim));
-            let on = app.grid.autosave();
-            let (r, resp) = ui.allocate_exact_size(vec2(30.0, 16.0), Sense::click());
-            ui.painter().rect_filled(r, 8.0, if on { t.accent } else { Color32::TRANSPARENT });
-            ui.painter().rect_stroke(r, 8.0, Stroke::new(1.0, if on { t.accent } else { t.text_dim }), StrokeKind::Inside);
-            let knob = if on { pos2(r.right() - 8.0, r.center().y) } else { pos2(r.left() + 8.0, r.center().y) };
-            ui.painter().circle_filled(knob, 5.0, if on { Color32::WHITE } else { t.text_dim });
-            if resp.on_hover_text("AutoSave: save after every change (workbooks saved to a file)").clicked() {
-                app.grid.toggle_autosave();
+            // A phone keeps only what fits: AutoSave and Share are also under File.
+            let compact = crate::compact(ui.ctx());
+            if !compact {
+                // AutoSave toggle (saves after each change when the workbook has a file).
+                ui.label(egui::RichText::new("AutoSave").font(theme::ui_font(12.5)).color(t.text_dim));
+                let on = app.grid.autosave();
+                let (r, resp) = ui.allocate_exact_size(vec2(30.0, 16.0), Sense::click());
+                ui.painter().rect_filled(r, 8.0, if on { t.accent } else { Color32::TRANSPARENT });
+                ui.painter().rect_stroke(r, 8.0, Stroke::new(1.0, if on { t.accent } else { t.text_dim }), StrokeKind::Inside);
+                let knob = if on { pos2(r.right() - 8.0, r.center().y) } else { pos2(r.left() + 8.0, r.center().y) };
+                ui.painter().circle_filled(knob, 5.0, if on { Color32::WHITE } else { t.text_dim });
+                if resp.on_hover_text("AutoSave: save after every change (workbooks saved to a file)").clicked() {
+                    app.grid.toggle_autosave();
+                }
+                ui.add_space(6.0);
             }
-            ui.add_space(6.0);
             let __k = icon_button(ui, Icon::Home, t.text_dim, "Home", vec2(26.0, ch));
             control_keytip(app, ui, &__k, "start");
             if __k.clicked() {
@@ -112,36 +118,29 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
                     app.print_now(json!({}));
                 }
             });
-            // Centered title.
-            let title = app.session.active().map(|d| d.display_title()).unwrap_or_default();
-            let dirty = app.session.active().is_some_and(|d| d.is_dirty());
-            ui.painter().text(
-                rect.center(),
-                Align2::CENTER_CENTER,
-                format!("{title}{}", if dirty { " •" } else { "" }),
-                theme::ui_bold(13.0),
-                t.text,
-            );
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let left_end = ui.cursor().left();
+            let right = ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.add_space(8.0);
                 let __k = icon_button(ui, Icon::Search, t.text_dim, "Search commands (⌘⇧Space)", vec2(28.0, ch));
                 control_keytip(app, ui, &__k, "commandSearch");
                 if __k.clicked() {
                     app.open_dialog("commandSearch", json!({}));
                 }
-                let share = small_button(ui, Icon::Share, "Share", "Share: export or save a copy", true);
-                egui::Popup::menu(&share).show(|ui| {
-                    if ui.button("Export as PDF…").clicked() {
-                        app.run_or_alert("file.exportPdf", json!({}));
-                    }
-                    for (label, fmt) in
-                        [("Save a Copy as Excel Workbook (.xlsx)…", "xlsx"), ("Export as CSV…", "csv"), ("Export as Web Page (.html)…", "html")]
-                    {
-                        if ui.button(label).clicked() {
-                            app.open_dialog("saveCopy", json!({"format": fmt}));
+                if !compact {
+                    let share = small_button(ui, Icon::Share, "Share", "Share: export or save a copy", true);
+                    egui::Popup::menu(&share).show(|ui| {
+                        if ui.button("Export as PDF…").clicked() {
+                            app.run_or_alert("file.exportPdf", json!({}));
                         }
-                    }
-                });
+                        for (label, fmt) in
+                            [("Save a Copy as Excel Workbook (.xlsx)…", "xlsx"), ("Export as CSV…", "csv"), ("Export as Web Page (.html)…", "html")]
+                        {
+                            if ui.button(label).clicked() {
+                                app.open_dialog("saveCopy", json!({"format": fmt}));
+                            }
+                        }
+                    });
+                }
                 let __k = icon_button(ui, Icon::Comment, t.text_dim, "Comments", vec2(28.0, ch));
                 control_keytip(app, ui, &__k, "comments");
                 if __k.clicked() {
@@ -157,7 +156,23 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
                     act(app, "view.darkMode", json!({}));
                 }
                 theme.context_menu(|ui| theme_choices(app, ui));
+                ui.min_rect().left()
             });
+            // The title centers on the window when it fits between the buttons; otherwise it
+            // sits in the gap between them, shortened with an ellipsis.
+            let title = app.session.active().map(|d| d.display_title()).unwrap_or_default();
+            let dirty = app.session.active().is_some_and(|d| d.is_dirty());
+            let text = format!("{title}{}", if dirty { " •" } else { "" });
+            let font = theme::ui_bold(13.0);
+            let want = ui.painter().layout_no_wrap(text.clone(), font.clone(), t.text).size().x;
+            let gap = (left_end + TITLE_GAP, right.inner - TITLE_GAP);
+            let w = want.min(gap.1 - gap.0);
+            if w > 0.0 {
+                let x = (rect.center().x - w / 2.0).clamp(gap.0, gap.1 - w);
+                let at = Rect::from_min_size(pos2(x, rect.top()), vec2(w, rect.height()));
+                let label = egui::Label::new(egui::RichText::new(text).font(font).color(t.text)).truncate().selectable(false).sense(Sense::hover());
+                ui.put(at, label);
+            }
         });
     });
 }
@@ -173,52 +188,58 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
             // Tabs row.
             let tabs_rect = Rect::from_min_size(ui.cursor().min, vec2(ui.available_width(), 32.0));
             ui.scope_builder(egui::UiBuilder::new().max_rect(tabs_rect), |ui| {
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 2.0;
-                    ui.add_space(8.0);
-                    file_menu(app, ui);
-                    let mut tabs: Vec<&str> = TABS.to_vec();
-                    let ctx_tabs = contextual_tabs(app);
-                    tabs.extend(ctx_tabs.iter());
-                    for tab in tabs {
-                        let active = app.ui.ribbon_tab == tab;
-                        let contextual = ctx_tabs.contains(&tab);
-                        let font = theme::ui_font(13.5);
-                        let label = app.ui.language.tr(tab);
-                        let tw = ui.painter().layout_no_wrap(label.to_string(), font.clone(), t.text).size().x;
-                        let (r, resp) = ui.allocate_exact_size(vec2(tw + 22.0, 30.0), Sense::click());
-                        if resp.hovered() && !active {
-                            ui.painter().rect_filled(r.shrink2(vec2(2.0, 4.0)), 5.0, t.hover);
-                        }
-                        let color = if contextual {
-                            t.accent
-                        } else if active {
-                            t.text
-                        } else {
-                            t.text_dim
-                        };
-                        ui.painter().text(r.center(), Align2::CENTER_CENTER, label, if active { theme::ui_bold(13.5) } else { font }, color);
-                        if active {
-                            let ul = Rect::from_center_size(pos2(r.center().x, r.bottom() - 3.0), vec2(tw.clamp(20.0, 40.0), 3.0));
-                            ui.painter().rect_filled(ul, 1.5, t.accent);
-                        }
-                        if resp.clicked() {
-                            if active && !collapsed {
-                                app.ui.ribbon_collapsed = true;
+                // Scrolls sideways when the tabs overflow (a phone), so every tab stays reachable.
+                let row =
+                    egui::ScrollArea::horizontal().id_salt("ribbon_tabs").scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden);
+                row.show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 2.0;
+                        ui.add_space(8.0);
+                        file_menu(app, ui);
+                        let mut tabs: Vec<&str> = TABS.to_vec();
+                        let ctx_tabs = contextual_tabs(app);
+                        tabs.extend(ctx_tabs.iter());
+                        for tab in tabs {
+                            let active = app.ui.ribbon_tab == tab;
+                            let contextual = ctx_tabs.contains(&tab);
+                            let font = theme::ui_font(13.5);
+                            let label = app.ui.language.tr(tab);
+                            let tw = ui.painter().layout_no_wrap(label.to_string(), font.clone(), t.text).size().x;
+                            let (r, resp) = ui.allocate_exact_size(vec2(tw + 22.0, 30.0), Sense::click());
+                            resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, active, label));
+                            if resp.hovered() && !active {
+                                ui.painter().rect_filled(r.shrink2(vec2(2.0, 4.0)), 5.0, t.hover);
+                            }
+                            let color = if contextual {
+                                t.accent
+                            } else if active {
+                                t.text
                             } else {
-                                app.ui.ribbon_tab = tab.to_string();
-                                app.ui.ribbon_collapsed = false;
+                                t.text_dim
+                            };
+                            ui.painter().text(r.center(), Align2::CENTER_CENTER, label, if active { theme::ui_bold(13.5) } else { font }, color);
+                            if active {
+                                let ul = Rect::from_center_size(pos2(r.center().x, r.bottom() - 3.0), vec2(tw.clamp(20.0, 40.0), 3.0));
+                                ui.painter().rect_filled(ul, 1.5, t.accent);
+                            }
+                            if resp.clicked() {
+                                if active && !collapsed {
+                                    app.ui.ribbon_collapsed = true;
+                                } else {
+                                    app.ui.ribbon_tab = tab.to_string();
+                                    app.ui.ribbon_collapsed = false;
+                                }
+                            }
+                            if resp.double_clicked() {
+                                app.ui.ribbon_collapsed = !collapsed;
+                            }
+                            if app.keytips.prefix() == Some("")
+                                && let Some(sequence) = keytip_table::tab_sequence(tab)
+                            {
+                                keytip(app, ui, sequence, pos2(r.center().x, r.bottom() - 1.0));
                             }
                         }
-                        if resp.double_clicked() {
-                            app.ui.ribbon_collapsed = !collapsed;
-                        }
-                        if app.keytips.prefix() == Some("")
-                            && let Some(sequence) = keytip_table::tab_sequence(tab)
-                        {
-                            keytip(app, ui, sequence, pos2(r.center().x, r.bottom() - 1.0));
-                        }
-                    }
+                    })
                 });
             });
             if collapsed {

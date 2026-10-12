@@ -1243,7 +1243,7 @@ impl SheetApp {
             if self.session.prefs.formula_bar {
                 formula_bar::show(self, ui);
             }
-            if self.ui.status_bar {
+            if self.ui.status_bar && !compact(&ctx) {
                 tabs::status_bar(self, ui);
             }
             tabs::sheet_tabs(self, ui);
@@ -1371,6 +1371,15 @@ pub fn clean_error(e: &str) -> String {
         return rest.to_string();
     }
     e.to_string()
+}
+
+/// Narrower than this (points), the window is laid out for a phone: the status bar hides and the
+/// title bar drops its least-used controls.
+pub const COMPACT_WIDTH: f32 = 600.0;
+
+/// Whether the window is phone-narrow (see [`COMPACT_WIDTH`]).
+pub fn compact(ctx: &egui::Context) -> bool {
+    ctx.content_rect().width() < COMPACT_WIDTH
 }
 
 #[allow(clippy::disallowed_methods)] // the clock is read only off wasm
