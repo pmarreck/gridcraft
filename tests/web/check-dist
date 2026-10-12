@@ -46,9 +46,10 @@ if [[ -f $manifest ]]; then
 	if ((${#font_files[@]} > 0)); then pass "the manifest lists ${#font_files[@]} font files"; else fail 'the manifest lists font files'; fi
 	if ((families > 0 && ${#licences[@]} == families)); then pass "each of $families families names its licence"; else fail "each family names its licence ($families families, ${#licences[@]} licences)"; fi
 	for file in "${font_files[@]}" "${licences[@]}"; do
-		case $file in
-			/* | *..* | *:*) fail "font path leaves the font folder: $file" ;;
-		esac
+		# The same rule as font_offer::safe_file: the app drops any other path, so its font would vanish.
+		if [[ ! $file =~ ^[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)*$ || /$file/ == */./* || /$file/ == */../* ]]; then
+			fail "font path the app would refuse: $file"
+		fi
 		[[ -s $dist/fonts/$file ]] || fail "missing font asset: fonts/$file"
 	done
 	bad=0

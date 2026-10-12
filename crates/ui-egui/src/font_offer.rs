@@ -63,13 +63,12 @@ pub fn parse_manifest(text: &str) -> Result<Vec<Offered>, String> {
         .collect())
 }
 
-/// A relative path inside the font folder: no scheme, no leading slash, no `..` component.
+/// A relative path inside the font folder. Only letters, digits, `_`, `-`, `.` and `/` separators
+/// are allowed, so a scheme, query, fragment or percent-encoded `%2e%2e` (which a browser's URL
+/// parser turns back into `..`) can never reach `fetch`; `.` and `..` components are refused too.
 fn safe_file(file: &str) -> bool {
-    !file.is_empty()
-        && !file.starts_with('/')
-        && !file.starts_with('\\')
-        && !file.contains(':')
-        && file.split(['/', '\\']).all(|part| !part.is_empty() && part != "..")
+    file.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | '/'))
+        && file.split('/').all(|part| !part.is_empty() && part != "." && part != "..")
 }
 
 /// The offered family a workbook font name means: the family itself or one it stands in for,
@@ -220,7 +219,8 @@ mod tests {
     fn unsafe_files_and_empty_families_are_dropped() {
         let text = r#"{"families":[
             {"family":"Ok","faces":[{"file":"Ok/a.ttf"},{"file":"../etc/passwd"},{"file":"/abs.ttf"},
-                {"file":"https://elsewhere.example/x.ttf"},{"file":"a//b.ttf"},{"file":""},{"file":"..\\x.ttf"}]},
+                {"file":"https://elsewhere.example/x.ttf"},{"file":"a//b.ttf"},{"file":""},{"file":"..\\x.ttf"},
+                {"file":"a/%2e%2e/%2E%2E/x.ttf"},{"file":"a/x.ttf?y"},{"file":"a/x.ttf#y"},{"file":"./a.ttf"}]},
             {"family":"AllBad","faces":[{"file":"../x.ttf"}]},
             {"family":"  ","faces":[{"file":"x.ttf"}]}
         ]}"#;
