@@ -34,14 +34,14 @@ pub fn start() {
             None
         } else {
             match crate::storage::open(crate::storage::DB_NAME).await {
-            Ok(db) => {
-                let library = Rc::new(Library::new(js_sys::Date::now));
-                match crate::storage::load_all(&db).await {
-                    Ok(entries) => library.restore(entries),
-                    Err(e) => log::error!("couldn't read the workbooks saved in this browser: {e}"),
+                Ok(db) => {
+                    let library = Rc::new(Library::new(js_sys::Date::now));
+                    match crate::storage::load_all(&db).await {
+                        Ok(entries) => library.restore(entries),
+                        Err(e) => log::error!("couldn't read the workbooks saved in this browser: {e}"),
+                    }
+                    Some(Storage::new(library, db))
                 }
-                Some(Storage::new(library, db))
-            }
                 Err(e) => {
                     log::warn!("browser storage is unavailable, so Save downloads: {e}");
                     None
