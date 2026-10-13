@@ -1019,6 +1019,13 @@ fn build_params(d: &Dialog) -> Json {
     v
 }
 
+/// The least space kept between a dialog and the screen's edges.
+const DIALOG_GUTTER: f32 = 16.0;
+/// A dialog window's title bar and frame, above and around its scrolling body.
+const DIALOG_CHROME: f32 = 48.0;
+/// How far above the screen's center a dialog sits.
+const DIALOG_LIFT: f32 = 40.0;
+
 pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     let Some(mut d) = app.dialog.take() else { return };
     if d.name == "pasteSpecial" {
@@ -1027,7 +1034,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     let mut open = true;
     let mut win_open = true;
     let mut confirm = false;
-    let width = match d.name.as_str() {
+    let width: f32 = match d.name.as_str() {
         "formatCells" => 560.0,
         "about" => 660.0,
         "insertFunction" | "commandSearch" | "nameManager" | "manageRules" | "journal" | "agents" | "macros" => 520.0,
@@ -1036,16 +1043,24 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         "solver" => 460.0,
         _ => 380.0,
     };
+    // A narrow or short screen (a phone) caps the dialog; taller content scrolls.
+    let screen = ctx.content_rect().shrink(DIALOG_GUTTER);
+    let width = width.min(screen.width());
+    // Dialogs sit a little above center, except on a phone, which needs all its height.
+    let lift = if crate::compact(ctx) { 0.0 } else { DIALOG_LIFT };
+    let body_height = screen.height() - DIALOG_CHROME - 2.0 * lift;
     let window = egui::Window::new(app.ui.language.tr(&d.title))
         .id(egui::Id::new("dialog").with(&d.name))
         .collapsible(false)
         .resizable(false)
         .default_width(width)
-        .anchor(egui::Align2::CENTER_CENTER, vec2(0.0, -40.0))
+        .max_width(width)
+        .anchor(egui::Align2::CENTER_CENTER, vec2(0.0, -lift))
         .open(&mut win_open);
     let window = if d.name == "insertPicture" { window.default_height(240.0) } else { window };
     window.show(ctx, |ui| {
             ui.set_min_width(width - 20.0);
+            egui::ScrollArea::vertical().max_height(body_height).min_scrolled_height(body_height).auto_shrink([false, true]).show(ui, |ui| {
             match d.name.as_str() {
                 "formatCells" => format_cells(app, ui, &mut d, &mut confirm),
                 "dataValidation" => data_validation_form(ui, &mut d, &mut confirm, &mut open),
@@ -1267,6 +1282,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                 _ => form(ui, &mut d, &mut confirm, &mut open),
             }
         });
+        });
     // Hyperlinks inside dialogs (About ▸ Contributors) open through the host's `open_url`, since
     // the native shell has no browser integration of its own.
     if let Some(open_url) = &app.services.open_url {
@@ -1401,9 +1417,21 @@ fn paste_special_shortcuts(d: &mut Dialog, ctx: &egui::Context) {
     });
 }
 
+/// A dialog's right-aligned row of buttons, one button high. A bare right-to-left layout claims
+/// all the height left in the window to center its buttons in, which stretches the dialog.
+fn button_row(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
+    let size = vec2(ui.available_width(), ui.spacing().interact_size.y);
+    ui.allocate_ui_with_layout(size, egui::Layout::right_to_left(egui::Align::Center), add);
+}
+
+/// A field's preferred `width`, narrowed to what the dialog has left on a small screen.
+fn fit(ui: &egui::Ui, width: f32) -> f32 {
+    width.min(ui.available_width())
+}
+
 fn ok_cancel(ui: &mut egui::Ui, confirm: &mut bool, open: &mut bool) {
     ui.add_space(8.0);
-    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+    button_row(ui, |ui| {
         let lang = crate::i18n::current(ui.ctx());
         let ok = ui.add(
             egui::Button::new(egui::RichText::new(format!("   {}   ", lang.tr("OK"))).color(Color32::WHITE))
@@ -1438,9 +1466,9 @@ fn form_fields(ui: &mut egui::Ui, d: &mut Dialog) {
                             .unwrap_or_default();
                         let multiline = key == "text";
                         let r = if multiline {
-                            ui.add(egui::TextEdit::multiline(&mut s).desired_rows(4).desired_width(320.0))
+                            ui.add(egui::TextEdit::multiline(&mut s).desired_rows(4).desired_width(fit(ui, 320.0)))
                         } else {
-                            ui.add(egui::TextEdit::singleline(&mut s).desired_width(320.0))
+                            ui.add(egui::TextEdit::singleline(&mut s).desired_width(fit(ui, 320.0)))
                         };
                         if r.changed() {
                             d.values.insert(key.into(), json!(s));
@@ -1452,7 +1480,7 @@ fn form_fields(ui: &mut egui::Ui, d: &mut Dialog) {
                     ui.vertical(|ui| {
                         ui.label(label);
                         let mut s = d.values.get(key).and_then(Json::as_str).unwrap_or_default().to_string();
-                        if ui.add(egui::TextEdit::singleline(&mut s).password(!d.show_password).desired_width(320.0)).changed() {
+                        if ui.add(egui::TextEdit::singleline(&mut s).password(!d.show_password).desired_width(fit(ui, 320.0))).changed() {
                             d.values.insert(key.into(), json!(s));
                         }
                         ui.checkbox(&mut d.show_password, "Show password");
@@ -1496,7 +1524,7 @@ fn form_fields(ui: &mut egui::Ui, d: &mut Dialog) {
                     }
                 }
                 Field::Note(t) => {
-                    ui.label(egui::RichText::new(t).small());
+                    ui.add(egui::Label::new(egui::RichText::new(t).small()).wrap());
                 }
             }
             ui.end_row();
@@ -1784,7 +1812,7 @@ fn format_cells(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: 
 fn insert_function(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool) {
     ui.horizontal(|ui| {
         ui.label("Search:");
-        let r = ui.add(egui::TextEdit::singleline(&mut d.search).desired_width(300.0).hint_text("e.g. lookup, average, date"));
+        let r = ui.add(egui::TextEdit::singleline(&mut d.search).desired_width(fit(ui, 300.0)).hint_text("e.g. lookup, average, date"));
         r.request_focus();
     });
     let locale = app.ui.language.formula_locale();
@@ -1804,7 +1832,7 @@ fn insert_function(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confir
             let name = locale.function_name(f["name"].as_str().unwrap_or(""));
             let r = ui.add(
                 egui::Button::selectable(i == d.list_index, format!("{name:<18} {}", f["category"].as_str().unwrap_or("")))
-                    .min_size(vec2(480.0, 20.0)),
+                    .min_size(vec2(fit(ui, 480.0), 20.0)),
             );
             if r.clicked() {
                 d.list_index = i;
@@ -1848,18 +1876,18 @@ fn find(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog) {
     let mut with = d.values.get("with").and_then(Json::as_str).unwrap_or("").to_string();
     ui.horizontal(|ui| {
         ui.label("Find what:");
-        ui.add(egui::TextEdit::singleline(&mut what).desired_width(260.0));
+        ui.add(egui::TextEdit::singleline(&mut what).desired_width(fit(ui, 260.0)));
     });
     if d.tab == "Replace" {
         ui.horizontal(|ui| {
             ui.label("Replace with:");
-            ui.add(egui::TextEdit::singleline(&mut with).desired_width(244.0));
+            ui.add(egui::TextEdit::singleline(&mut with).desired_width(fit(ui, 244.0)));
         });
     }
     let mut case = d.values.get("matchCase").and_then(Json::as_bool).unwrap_or(false);
     let mut whole = d.values.get("wholeCell").and_then(Json::as_bool).unwrap_or(false);
     let mut wb = d.values.get("within").and_then(Json::as_str) == Some("workbook");
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         ui.checkbox(&mut case, "Match case");
         ui.checkbox(&mut whole, "Match entire cell contents");
         ui.checkbox(&mut wb, "Within workbook");
@@ -2057,7 +2085,7 @@ fn name_manager(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, open: &mu
         });
     });
     ui.add_space(8.0);
-    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+    button_row(ui, |ui| {
         if ui.button(" Close ").clicked() {
             *open = false;
         }
@@ -2119,6 +2147,11 @@ fn chart_icon(t: &str) -> Icon {
     }
 }
 
+/// Recommended Charts: the width of the list of chart types.
+const CHART_LIST_WIDTH: f32 = 190.0;
+/// Recommended Charts: the preview's full size, scaled down to fit a narrow screen.
+const CHART_PREVIEW: egui::Vec2 = vec2(360.0, 216.0);
+
 fn recommended_charts(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) {
     ui.horizontal(|ui| {
         for tab in ["Recommended Charts", "All Charts"] {
@@ -2131,9 +2164,11 @@ fn recommended_charts(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, con
     ui.separator();
     let choices = chart_choices(d);
     let t = crate::theme::Tokens::get(ui.ctx());
-    ui.horizontal_top(|ui| {
+    // The list sits beside the preview, or above it when the screen is too narrow for both.
+    let side_by_side = ui.available_width() >= CHART_LIST_WIDTH + 12.0 + CHART_PREVIEW.x;
+    let mut body = |ui: &mut egui::Ui| {
         ui.vertical(|ui| {
-            ui.set_width(190.0);
+            ui.set_width(CHART_LIST_WIDTH);
             egui::ScrollArea::vertical().id_salt("chart_choices").max_height(300.0).show(ui, |ui| {
                 for (i, (kind, _, label)) in choices.iter().enumerate() {
                     let resp = ui
@@ -2157,7 +2192,8 @@ fn recommended_charts(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, con
         ui.vertical(|ui| {
             let label = choices.get(d.list_index).map(|c| c.2.clone()).unwrap_or_default();
             ui.strong(label);
-            let (rect, _) = ui.allocate_exact_size(vec2(360.0, 216.0), Sense::hover());
+            let width = fit(ui, CHART_PREVIEW.x);
+            let (rect, _) = ui.allocate_exact_size(CHART_PREVIEW * (width / CHART_PREVIEW.x), Sense::hover());
             ui.painter().rect_filled(rect, 2.0, Color32::WHITE);
             ui.painter().rect_stroke(rect, 2.0, Stroke::new(1.0, t.separator), StrokeKind::Inside);
             let params = json!({"type": d.values.get("type").cloned().unwrap_or(Json::Null), "subtype": d.values.get("subtype").cloned().unwrap_or(Json::Null)});
@@ -2167,7 +2203,12 @@ fn recommended_charts(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, con
                 crate::chartview::paint_chart(ui.painter(), rect, &doc.wb, sheet, &chart);
             }
         });
-    });
+    };
+    if side_by_side {
+        ui.horizontal_top(body);
+    } else {
+        body(ui);
+    }
     ok_cancel(ui, confirm, open);
     if *confirm {
         *confirm = false;
@@ -2189,7 +2230,7 @@ fn select_data(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &
     let edit = |ui: &mut egui::Ui, d: &mut Dialog, key: &str, label: &str| {
         ui.label(label);
         let mut v = text(d, key);
-        if ui.add(egui::TextEdit::singleline(&mut v).desired_width(420.0)).changed() {
+        if ui.add(egui::TextEdit::singleline(&mut v).desired_width(fit(ui, 420.0))).changed() {
             d.values.insert(key.into(), json!(v));
         }
     };
@@ -2275,7 +2316,7 @@ fn manage_rules(app: &mut SheetApp, ui: &mut egui::Ui) {
 }
 
 fn command_search(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool) {
-    let r = ui.add(egui::TextEdit::singleline(&mut d.search).desired_width(480.0).hint_text("Type a command, e.g. freeze, chart, bold…"));
+    let r = ui.add(egui::TextEdit::singleline(&mut d.search).desired_width(fit(ui, 480.0)).hint_text("Type a command, e.g. freeze, chart, bold…"));
     r.request_focus();
     let q = d.search.to_ascii_lowercase();
     let cmds: Vec<(String, String, String)> = app
@@ -2295,7 +2336,7 @@ fn command_search(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm
     }
     egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
         for (i, (id, label, menu)) in cmds.iter().enumerate() {
-            let r = ui.add(egui::Button::selectable(i == d.list_index, format!("{label}    {menu}")).min_size(vec2(480.0, 20.0)));
+            let r = ui.add(egui::Button::selectable(i == d.list_index, format!("{label}    {menu}")).min_size(vec2(fit(ui, 480.0), 20.0)));
             if r.clicked() {
                 d.list_index = i;
                 *confirm = true;
@@ -2515,7 +2556,7 @@ fn solver(ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool
         .map(|a| a.iter().map(|c| c.as_str().map(str::to_string).unwrap_or_else(|| c.to_string())).collect())
         .unwrap_or_default();
     egui::Frame::group(ui.style()).show(ui, |ui| {
-        ui.set_min_size(vec2(420.0, 90.0));
+        ui.set_min_size(vec2(fit(ui, 420.0), 90.0));
         egui::ScrollArea::vertical().max_height(110.0).show(ui, |ui| {
             for (i, c) in list.iter().enumerate() {
                 if ui.selectable_label(d.list_index == i, c).clicked() {
@@ -2524,7 +2565,7 @@ fn solver(ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool
             }
         });
     });
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         edit(ui, d, "newLhs", 110.0);
         let op = text(d, "newOp");
         egui::ComboBox::from_id_salt("solverOp").selected_text(op.clone()).width(60.0).show_ui(ui, |ui| {
@@ -2585,7 +2626,7 @@ fn solver(ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool
         .small(),
     );
     ui.add_space(8.0);
-    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+    button_row(ui, |ui| {
         let solve =
             ui.add(egui::Button::new(egui::RichText::new("  Solve  ").color(Color32::WHITE)).fill(crate::theme::Tokens::get(ui.ctx()).accent));
         if solve.clicked() && !text(d, "objective").trim().is_empty() {

@@ -1,6 +1,6 @@
 //! On a phone-width window the layout compacts: every ribbon tab stays reachable by swiping the
 //! tab row, the status bar gives its height to the grid, and the workbook title never covers the
-//! title bar's buttons.
+//! title bar's buttons. Every dialog fits the screen, scrolling when it is taller.
 
 use egui::accesskit::Role;
 use egui::{Event, Pos2, TouchDeviceId, TouchId, TouchPhase, vec2};
@@ -93,4 +93,109 @@ fn the_title_never_covers_a_title_bar_button() {
             }
         }
     }
+}
+
+/// Every dialog that opens a window, by the name `SheetApp::open_dialog` takes.
+const DIALOGS: &[&str] = &[
+    "insertCells",
+    "insertPaste",
+    "deleteCells",
+    "rowHeight",
+    "columnWidth",
+    "defaultWidth",
+    "renameSheet",
+    "moveSheet",
+    "protectSheet",
+    "allowEditRanges",
+    "protectWorkbook",
+    "unprotectWorkbook",
+    "unprotectSheet",
+    "unhideSheet",
+    "pasteSpecial",
+    "series",
+    "comment",
+    "insertLink",
+    "sparkline",
+    "headerFooter",
+    "pageSetup",
+    "textToColumns",
+    "removeDuplicates",
+    "goalSeek",
+    "forecastSheet",
+    "analysisToolPak",
+    "solver",
+    "solverResults",
+    "subtotal",
+    "zoom",
+    "defineName",
+    "dataValidation",
+    "cfQuick",
+    "formatCells",
+    "insertFunction",
+    "find",
+    "goTo",
+    "pivotCalculatedField",
+    "goToSpecial",
+    "sort",
+    "nameManager",
+    "manageRules",
+    "commandSearch",
+    "agents",
+    "about",
+    "recommendedCharts",
+    "selectData",
+    "journal",
+    "macros",
+    "statistics",
+    "accessibility",
+    "errorChecking",
+    "evaluateFormula",
+    "spelling",
+    "chartTitle",
+    "insertPicture",
+    "pickList",
+    "saveCopy",
+    "saveChanges",
+    "libraryConflict",
+    "start",
+    "openLink",
+    "openPassword",
+];
+
+/// Opens dialog `name` on a fresh window of `size` holding a little data and a chart (the chart
+/// dialogs need both), and returns its window's rect, or None when no window opened.
+fn open_dialog(size: egui::Vec2, name: &str) -> (Harness, Option<egui::Rect>) {
+    let mut h = harness(size);
+    let session = &mut h.state_mut().session;
+    let values = serde_json::json!([["Name", "Qty"], ["a", 1], ["b", 2]]);
+    session.execute("range.setValues", serde_json::json!({"range": "A1", "values": values})).unwrap();
+    session.execute("selection.set", serde_json::json!({"range": "A1:B3"})).unwrap();
+    let chart = session.execute("insert.chart", serde_json::json!({"type": "column", "at": "D3"})).unwrap();
+    h.state_mut().open_dialog(name, serde_json::json!({"chart": chart["chart"]}));
+    h.run_steps(10);
+    let id = h.state().dialog.as_ref().map(|d| egui::Id::new("dialog").with(&d.name));
+    let rect = id.and_then(|id| egui::AreaState::load(&h.ctx, id)).map(|s| s.rect());
+    (h, rect)
+}
+
+#[test]
+fn every_dialog_fits_on_a_phone_and_a_desktop_screen() {
+    for size in [PHONE, DESKTOP] {
+        let screen = egui::Rect::from_min_size(Pos2::ZERO, size);
+        let misfits: Vec<String> = DIALOGS
+            .iter()
+            .filter_map(|&name| match open_dialog(size, name).1 {
+                Some(r) if screen.shrink(1.0).contains_rect(r) => None,
+                r => Some(format!("{name}: {r:?}")),
+            })
+            .collect();
+        assert!(misfits.is_empty(), "dialogs not inside a {size:?} screen:\n{}", misfits.join("\n"));
+    }
+}
+
+#[test]
+fn a_dialog_ends_just_below_its_ok_button() {
+    let (h, window) = open_dialog(DESKTOP, "insertCells");
+    let (window, ok) = (window.unwrap(), h.get_by_role_and_label(Role::Button, "   OK   ").rect());
+    assert!(window.bottom() - ok.bottom() < 24.0, "OK at {ok:?} sits well above the window's bottom edge {window:?}");
 }
