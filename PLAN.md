@@ -24,6 +24,7 @@
 	- [x] Compact layout, first pass (2026-10-12 5:30 PM EDT): below 600 points wide (`COMPACT_WIDTH`) the status bar hides and the title bar drops AutoSave and Share. Ribbon tabs scroll sideways and carry accessible labels. The title sits between the button groups and shortens with an ellipsis, at every width.
 	- [x] Dialogs fit the screen (2026-10-13 1:55 PM EDT): every dialog is capped at the screen size less a 16-point gutter, and its body scrolls when taller. Fixed-width fields narrow to the space left; Find's and Solver's rows wrap; Recommended Charts stacks its list above the preview. Fixed an upstream layout bug: the OK/Cancel row claimed all remaining height to center its buttons, so small dialogs stretched to 420 points and Paste Special filled the whole screen; dialogs now end just below their buttons.
 	- [ ] Tap targets of at least 44 points for the ribbon's small buttons on touch screens (about 26 points today).
+	- [ ] Pinch zoom rounds to a whole percent every frame, so a slow pinch at a low zoom (10–25%) can stall; keep the unrounded zoom between frames of one pinch.
 	- [ ] Phone dialogs taller than the screen scroll their OK/Cancel row with the content; consider pinning it below the scroll area.
 	- [x] Real-device check: BDFN tried the deployed build and found nothing to change (2026-10-13 12:28 PM EDT).
 

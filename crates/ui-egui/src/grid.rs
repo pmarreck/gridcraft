@@ -593,8 +593,16 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     };
     // Scrolling.
     let (scroll_delta, zoom_delta, modifiers, now) = ui.input(|i| (i.smooth_scroll_delta, i.zoom_delta(), i.modifiers, i.time));
+    // A pinch (a touch screen or a trackpad) arrives as zoom events and follows the fingers; the
+    // rest of the zoom is Ctrl+wheel, which steps along the ladder.
+    let pinch: f32 = ui.input(|i| i.events.iter().map(|e| if let egui::Event::Zoom(f) = e { *f } else { 1.0 }).product());
+    let zoom_delta = zoom_delta / pinch;
     if (resp.hovered() || resp.contains_pointer()) && !crate::text_box::contains_pointer(app, ui.ctx()) {
-        if zoom_delta != 1.0 {
+        if pinch != 1.0 && pinch.is_finite() && pinch > 0.0 {
+            app.grid.wheel_zoom = None;
+            let z = (sh.zoom as f32 * pinch).clamp(10.0, 400.0).round();
+            let _ = app.session.run("view.zoom", json!({"percent": z}));
+        } else if zoom_delta != 1.0 {
             // egui's zoom factor is e^(speed × points); one notch is `line_scroll_speed` points.
             let notch = ui.ctx().options(|o| o.input_options.scroll_zoom_speed * o.input_options.line_scroll_speed);
             let turned = zoom_delta.ln() / notch;
