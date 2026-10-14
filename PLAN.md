@@ -28,6 +28,7 @@
 	- [x] Phone: the File view (backstage) left bar pushed the page content past the right edge (fixed 2026-10-13 9:50 PM EDT). Below the compact width the navigation becomes a row along the top that scrolls sideways; pages cap their width at the screen; Print stacks the preview under its settings.
 	- [x] Told WordCraft about both fixes via llmsend (2026-10-13 9:58 PM EDT).
 	- [x] Ribbon wheel panning, diagonal tail (found by WordCraft; fixed 2026-10-13 9:55 PM EDT): egui smooths each axis separately, so a diagonal trackpad gesture ends with a vertical-only tail that `wheel_pans_sideways` turns into extra sideways motion. Classify each raw wheel gesture as purely vertical or not, remember it while scrolling, and remap only pure vertical gestures. Port WordCraft's differential test (horizontal vs diagonal end at the same offset).
+	- [ ] Web picker hardening (from WordCraft review): `pick_file` forgets its change/cancel closures, leaking two per pick, so keep them alive only until change or cancel fires. It also reads whatever size the user picks; cap it like other input-sized allocations and report a file that is too large.
 	- [ ] The ribbon gives no sign that it overflows (its scroll bar is hidden); consider a fade or chevron at the clipped edge.
 	- [ ] Most ribbon buttons (`big_button`, `icon_button`) have no accessible name, so screen readers and tests cannot find them; label them with their tooltip text.
 	- [ ] Tap targets of at least 44 points for the ribbon's small buttons on touch screens (about 26 points today).
