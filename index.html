@@ -7,8 +7,8 @@
   <link rel="icon" href="./gridcraft-45f84b7721cb79a9.ico" integrity="sha384-FzBCWcgv5VqBLEPSBvyC78gOs2HMh3hKu2LSLSXU01NgL5yKLk/nHdINuu0Ztky1"/>
   
 <script type="module">
-import init, * as bindings from './gridcraft-web-695dd3d7f8fc95ac.js';
-const wasm = await init({ module_or_path: './gridcraft-web-695dd3d7f8fc95ac_bg.wasm' });
+import init, * as bindings from './gridcraft-web-3464e535a8848740.js';
+const wasm = await init({ module_or_path: './gridcraft-web-3464e535a8848740_bg.wasm' });
 
 
 window.wasmBindings = bindings;
@@ -23,7 +23,7 @@ dispatchEvent(new CustomEvent("TrunkApplicationStarted", {detail: {wasm}}));
     #gridcraft_loading { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
       color: #555; font: 14px system-ui, sans-serif; pointer-events: none; }
   </style>
-<link rel="modulepreload" href="./gridcraft-web-695dd3d7f8fc95ac.js" crossorigin="anonymous" integrity="sha384-wbVw9Xvy8eWMIAMobkyWgPcrvBTRp0loEZd+fn82F7cJmsM0KAdxz2JZHdTVef/B"><link rel="preload" href="./gridcraft-web-695dd3d7f8fc95ac_bg.wasm" crossorigin="anonymous" integrity="sha384-6gHgtT63lhNabvmFNRPxr9/5OuRHkzc+55e3xSZDv4uORpfnw9WluIQ0n75mS+OO" as="fetch" type="application/wasm"></head>
+<link rel="modulepreload" href="./gridcraft-web-3464e535a8848740.js" crossorigin="anonymous" integrity="sha384-wbVw9Xvy8eWMIAMobkyWgPcrvBTRp0loEZd+fn82F7cJmsM0KAdxz2JZHdTVef/B"><link rel="preload" href="./gridcraft-web-3464e535a8848740_bg.wasm" crossorigin="anonymous" integrity="sha384-3QB6dmZdQ58+cp7OHlvs10JrgMxztjHLWiAo7LSUMdNMWsSclbO798auAkyaaXPW" as="fetch" type="application/wasm"></head>
 <body>
   <canvas id="gridcraft_canvas"></canvas>
   <div id="gridcraft_loading">Loading GridCraft&hellip;</div>
