@@ -4,6 +4,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::rc::Rc;
 
+use crate::picker::{self, Failures};
 use gridcraft_engine::Session;
 use gridcraft_ui_egui::library::{Change, Library, Outcome, StoredRecord};
 use gridcraft_ui_egui::{Inbox, Services, SheetApp};
@@ -61,6 +62,7 @@ pub fn start() {
                 options,
                 Box::new(move |cc| {
                     let inbox: Inbox = Inbox::default();
+                    let failures = Failures::default();
                     let mut session = Session::new();
                     // In host mode the parent sends the workbook to edit; no sample meanwhile.
                     let q = if app_bridge.is_some() { String::new() } else { query() };
@@ -69,7 +71,7 @@ pub fn start() {
                     } else if q.contains("sample") {
                         let _ = session.execute("file.new", serde_json::json!({"sample": "sales"}));
                     }
-                    let mut services = services(inbox.clone(), cc.egui_ctx.clone());
+                    let mut services = services(inbox.clone(), failures.clone(), cc.egui_ctx.clone());
                     services.library = storage.as_ref().map(|s| s.library.clone());
                     if let Some(storage) = &storage {
                         storage.listen(&cc.egui_ctx);
@@ -98,7 +100,7 @@ pub fn start() {
                     crate::site_fonts::offer(cc.egui_ctx.clone());
                     // A host page guards leaving itself; standing alone, the browser asks first.
                     let unsaved = if app_bridge.is_some() { Rc::default() } else { warn_before_unload() };
-                    Ok(Box::new(WebShell { app, inbox, bridge: app_bridge, storage, unsaved, fonts_seen: None }))
+                    Ok(Box::new(WebShell { app, inbox, failures, bridge: app_bridge, storage, unsaved, fonts_seen: None }))
                 }),
             )
             .await;
@@ -125,6 +127,8 @@ fn query_param(key: &str) -> Option<String> {
 struct WebShell {
     app: SheetApp,
     inbox: Inbox,
+    /// Files the picker refused or couldn't read; each becomes a message box.
+    failures: Failures,
     bridge: Option<crate::host::Bridge>,
     storage: Option<Storage>,
     /// Mirrors [`SheetApp::has_unsaved_work`] for the `beforeunload` handler.
@@ -251,6 +255,9 @@ impl eframe::App for WebShell {
                 }
             });
         }
+        if let Some(failure) = self.failures.borrow_mut().drain(..).next_back() {
+            self.app.message = Some(("GridCraft".into(), failure));
+        }
         self.app.logic(ctx);
         if let Some(storage) = &self.storage {
             storage.flush(&mut self.app, ctx);
@@ -275,63 +282,24 @@ impl eframe::App for WebShell {
     }
 }
 
-/// Show the browser's file picker and deliver the chosen file to `inbox`. The input is clicked
-/// synchronously: Safari opens a picker only while it is still handling the tap or click that
-/// asked for it (eframe runs that frame inside the browser's `pointerup` handler), so it must not
-/// wait for an async task the way `rfd` does.
-fn pick_file(accept: &str, inbox: Inbox, ctx: egui::Context) {
-    let Some(document) = web_sys::window().and_then(|w| w.document()) else { return };
-    let Some(body) = document.body() else { return };
-    let Some(input) = document.create_element("input").ok().and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok()) else {
-        return;
-    };
-    input.set_type("file");
-    input.set_accept(accept);
-    let _ = input.style().set_property("display", "none");
-    // Safari delivers `change` only to an input in the document.
-    if body.append_child(&input).is_err() {
-        return;
-    }
-    let on_change = {
-        let input = input.clone();
-        wasm_bindgen::closure::Closure::<dyn FnMut()>::new(move || {
-            input.remove();
-            let Some(file) = input.files().and_then(|files| files.get(0)) else { return };
-            let (inbox, ctx) = (inbox.clone(), ctx.clone());
-            wasm_bindgen_futures::spawn_local(async move {
-                match wasm_bindgen_futures::JsFuture::from(file.array_buffer()).await {
-                    Ok(buffer) => {
-                        let bytes = js_sys::Uint8Array::new(&buffer).to_vec();
-                        inbox.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push((file.name(), bytes));
-                        ctx.request_repaint();
-                    }
-                    Err(e) => log::error!("couldn't read {}: {e:?}", file.name()),
-                }
-            });
-        })
-    };
-    let on_cancel = {
-        let input = input.clone();
-        wasm_bindgen::closure::Closure::<dyn FnMut()>::new(move || input.remove())
-    };
-    input.set_onchange(Some(on_change.as_ref().unchecked_ref()));
-    let _ = input.add_event_listener_with_callback("cancel", on_cancel.as_ref().unchecked_ref());
-    // Each lives as long as its input, which the page drops once a file is chosen or the picker
-    // is cancelled.
-    on_change.forget();
-    on_cancel.forget();
-    input.click();
-}
-
-fn services(inbox: Inbox, ctx: egui::Context) -> Services {
+fn services(inbox: Inbox, failures: Failures, ctx: egui::Context) -> Services {
     let open_inbox = inbox.clone();
+    let picture_failures = failures.clone();
     let picture_ctx = ctx.clone();
     Services {
         copy_html: Some(Box::new(copy_html)),
         open_async: Some(Box::new(move || {
-            pick_file(".xlsx,.xlsm,.xls,.xlsb,.ods,.csv,.tsv,.txt,.json", open_inbox.clone(), ctx.clone());
+            picker::pick(
+                ".xlsx,.xlsm,.xls,.xlsb,.ods,.csv,.tsv,.txt,.json",
+                picker::MAX_FILE_BYTES,
+                open_inbox.clone(),
+                failures.clone(),
+                ctx.clone(),
+            );
         })),
-        pick_picture_async: Some(Box::new(move |inbox| pick_file(".png,.jpg,.jpeg", inbox, picture_ctx.clone()))),
+        pick_picture_async: Some(Box::new(move |inbox| {
+            picker::pick(".png,.jpg,.jpeg", picker::MAX_FILE_BYTES, inbox, picture_failures.clone(), picture_ctx.clone())
+        })),
         download: Some(Box::new(|name: &str, bytes: &[u8]| {
             if let Err(e) = download(name, bytes) {
                 log::error!("download of {name} failed: {e}");

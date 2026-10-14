@@ -19,6 +19,8 @@
 #[cfg(target_arch = "wasm32")]
 mod host;
 #[cfg(target_arch = "wasm32")]
+mod picker;
+#[cfg(target_arch = "wasm32")]
 mod site_fonts;
 #[cfg(target_arch = "wasm32")]
 mod storage;
