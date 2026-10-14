@@ -177,6 +177,19 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
     });
 }
 
+/// The ribbon rows scroll only sideways, so a plain vertical mouse wheel over one pans it left and
+/// right instead of doing nothing (as a horizontal wheel, trackpad or finger swipe already does).
+fn wheel_pans_sideways(ui: &Ui, rect: Rect) {
+    if ui.rect_contains_pointer(rect) {
+        ui.ctx().input_mut(|i| {
+            let d = i.smooth_scroll_delta;
+            if d.x == 0.0 && d.y != 0.0 {
+                i.smooth_scroll_delta = vec2(d.y, 0.0);
+            }
+        });
+    }
+}
+
 pub fn show(app: &mut SheetApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     let collapsed = app.ui.ribbon_collapsed;
@@ -188,6 +201,7 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
             // Tabs row.
             let tabs_rect = Rect::from_min_size(ui.cursor().min, vec2(ui.available_width(), 32.0));
             ui.scope_builder(egui::UiBuilder::new().max_rect(tabs_rect), |ui| {
+                wheel_pans_sideways(ui, tabs_rect);
                 // Scrolls sideways when the tabs overflow (a phone), so every tab stays reachable.
                 let row =
                     egui::ScrollArea::horizontal().id_salt("ribbon_tabs").scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden);
@@ -251,6 +265,7 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
             ui.painter().rect_stroke(card, 10.0, Stroke::new(1.0, t.ribbon_border), StrokeKind::Inside);
             let inner = card.shrink2(vec2(10.0, 6.0));
             ui.scope_builder(egui::UiBuilder::new().max_rect(inner), |ui| {
+                wheel_pans_sideways(ui, inner);
                 egui::ScrollArea::horizontal().scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden).show(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing = vec2(2.0, 2.0);

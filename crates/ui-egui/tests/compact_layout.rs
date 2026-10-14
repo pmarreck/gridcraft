@@ -199,3 +199,29 @@ fn a_dialog_ends_just_below_its_ok_button() {
     let (window, ok) = (window.unwrap(), h.get_by_role_and_label(Role::Button, "   OK   ").rect());
     assert!(window.bottom() - ok.bottom() < 24.0, "OK at {ok:?} sits well above the window's bottom edge {window:?}");
 }
+
+/// One frame of wheel input with the pointer at `at`.
+fn wheel(h: &mut Harness, at: Pos2, delta: egui::Vec2) {
+    h.input_mut().events.push(Event::PointerMoved(at));
+    h.run_steps(1);
+    h.input_mut().events.push(Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Line,
+        delta,
+        phase: TouchPhase::Move,
+        modifiers: egui::Modifiers::NONE,
+    });
+    h.run_steps(20);
+}
+
+#[test]
+fn a_vertical_wheel_over_an_overflowing_ribbon_pans_it_sideways() {
+    // Home is wider than 700 points, so its ribbon overflows.
+    let size = vec2(700.0, 844.0);
+    let mut h = harness(size);
+    let paste = |h: &Harness| h.get_by_role_and_label(Role::Button, "Paste").rect();
+    let before = paste(&h);
+    let over_ribbon = Pos2::new(size.x / 2.0, tab_rect(&h, "Home").bottom() + 40.0);
+    wheel(&mut h, over_ribbon, vec2(0.0, -10.0));
+    let after = paste(&h);
+    assert!(after.left() < before.left() - 100.0, "wheeling down pans the ribbon left: {before:?} -> {after:?}");
+}
