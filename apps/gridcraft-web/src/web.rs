@@ -275,38 +275,63 @@ impl eframe::App for WebShell {
     }
 }
 
+/// Show the browser's file picker and deliver the chosen file to `inbox`. The input is clicked
+/// synchronously: Safari opens a picker only while it is still handling the tap or click that
+/// asked for it (eframe runs that frame inside the browser's `pointerup` handler), so it must not
+/// wait for an async task the way `rfd` does.
+fn pick_file(accept: &str, inbox: Inbox, ctx: egui::Context) {
+    let Some(document) = web_sys::window().and_then(|w| w.document()) else { return };
+    let Some(body) = document.body() else { return };
+    let Some(input) = document.create_element("input").ok().and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok()) else {
+        return;
+    };
+    input.set_type("file");
+    input.set_accept(accept);
+    let _ = input.style().set_property("display", "none");
+    // Safari delivers `change` only to an input in the document.
+    if body.append_child(&input).is_err() {
+        return;
+    }
+    let on_change = {
+        let input = input.clone();
+        wasm_bindgen::closure::Closure::<dyn FnMut()>::new(move || {
+            input.remove();
+            let Some(file) = input.files().and_then(|files| files.get(0)) else { return };
+            let (inbox, ctx) = (inbox.clone(), ctx.clone());
+            wasm_bindgen_futures::spawn_local(async move {
+                match wasm_bindgen_futures::JsFuture::from(file.array_buffer()).await {
+                    Ok(buffer) => {
+                        let bytes = js_sys::Uint8Array::new(&buffer).to_vec();
+                        inbox.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push((file.name(), bytes));
+                        ctx.request_repaint();
+                    }
+                    Err(e) => log::error!("couldn't read {}: {e:?}", file.name()),
+                }
+            });
+        })
+    };
+    let on_cancel = {
+        let input = input.clone();
+        wasm_bindgen::closure::Closure::<dyn FnMut()>::new(move || input.remove())
+    };
+    input.set_onchange(Some(on_change.as_ref().unchecked_ref()));
+    let _ = input.add_event_listener_with_callback("cancel", on_cancel.as_ref().unchecked_ref());
+    // Each lives as long as its input, which the page drops once a file is chosen or the picker
+    // is cancelled.
+    on_change.forget();
+    on_cancel.forget();
+    input.click();
+}
+
 fn services(inbox: Inbox, ctx: egui::Context) -> Services {
     let open_inbox = inbox.clone();
     let picture_ctx = ctx.clone();
     Services {
         copy_html: Some(Box::new(copy_html)),
         open_async: Some(Box::new(move || {
-            let inbox = open_inbox.clone();
-            let ctx = ctx.clone();
-            wasm_bindgen_futures::spawn_local(async move {
-                let Some(file) = rfd::AsyncFileDialog::new()
-                    .add_filter("Spreadsheets", &["xlsx", "xlsm", "xls", "xlsb", "ods", "csv", "tsv", "txt", "json"])
-                    .pick_file()
-                    .await
-                else {
-                    return;
-                };
-                let bytes = file.read().await;
-                inbox.lock().unwrap_or_else(|e| e.into_inner()).push((file.file_name(), bytes));
-                ctx.request_repaint();
-            });
+            pick_file(".xlsx,.xlsm,.xls,.xlsb,.ods,.csv,.tsv,.txt,.json", open_inbox.clone(), ctx.clone());
         })),
-        pick_picture_async: Some(Box::new(move |inbox| {
-            let ctx = picture_ctx.clone();
-            wasm_bindgen_futures::spawn_local(async move {
-                let Some(file) = rfd::AsyncFileDialog::new().add_filter("Pictures (PNG, JPEG)", &["png", "jpg", "jpeg"]).pick_file().await else {
-                    return;
-                };
-                let bytes = file.read().await;
-                inbox.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push((file.file_name(), bytes));
-                ctx.request_repaint();
-            });
-        })),
+        pick_picture_async: Some(Box::new(move |inbox| pick_file(".png,.jpg,.jpeg", inbox, picture_ctx.clone()))),
         download: Some(Box::new(|name: &str, bytes: &[u8]| {
             if let Err(e) = download(name, bytes) {
                 log::error!("download of {name} failed: {e}");

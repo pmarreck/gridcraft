@@ -4,6 +4,7 @@
 //! event alongside the touch) through the app's raw-input hook, as the real shells do.
 
 use egui::{Event, Modifiers, PointerButton, Pos2, TouchDeviceId, TouchId, TouchPhase};
+use egui_kittest::kittest::Queryable as _;
 use gridcraft_engine::Session;
 use gridcraft_engine::core::{CellRef, RangeRef};
 use gridcraft_ui_egui::{SheetApp, grid::Geo};
@@ -184,4 +185,22 @@ fn a_long_press_opens_the_context_menu_on_that_cell() {
     frame(&mut h, up(0, at));
     idle(&mut h, 2);
     assert!(h.state().grid.context_menu.is_some(), "lifting leaves it open");
+}
+
+/// Safari opens a file picker (and starts downloads) only while it is handling the tap itself.
+/// eframe's web runner runs a frame inside `pointerup`, before `touchend` arrives; a tap must click
+/// in that frame, so a button that opens the picker does so while the browser still allows it.
+#[test]
+fn a_tap_clicks_in_the_frame_the_browser_reports_the_lift() {
+    let mut h = harness();
+    let view = h.get_by_role_and_label(egui::accesskit::Role::Button, "View").rect().center();
+    frame(&mut h, down(0, view));
+    // `pointerup`: eframe runs this frame at once, inside the browser's event handler.
+    frame(&mut h, vec![Event::PointerButton { pos: view, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE }]);
+    assert_eq!(h.state().ui.ribbon_tab, "View", "the tap clicked while the browser was handling it");
+    // `touchend` follows in a later frame; the tap does not click twice.
+    frame(&mut h, vec![touch(0, TouchPhase::End, view)]);
+    idle(&mut h, 3);
+    assert_eq!(h.state().ui.ribbon_tab, "View");
+    assert!(!h.state().ui.ribbon_collapsed, "a second click on the active tab would collapse the ribbon");
 }

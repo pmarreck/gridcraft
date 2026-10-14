@@ -99,6 +99,17 @@ impl TouchTranslator {
                 Event::Touch { id, phase, pos, .. } => {
                     scrolled |= self.touch(now, id.0, phase, pos, caught, &mut out);
                 }
+                // The browser reports the lift as a pointer release before the touch ends, and
+                // eframe runs that frame inside the browser's handler, the only time Safari lets a
+                // page open a file picker. A tap clicks there, so its button may open one.
+                Event::PointerButton { button: PointerButton::Primary, pressed: false, pos, .. }
+                    if self.fingers.len() == 1 && matches!(self.mode, Mode::Pending { .. }) =>
+                {
+                    self.tap(now, pos, &mut out);
+                    self.queued.clear();
+                    out.push(button(pos, PointerButton::Primary, false));
+                    self.mode = Mode::Spent;
+                }
                 // The pointer egui emulates from the first finger: the touches say it better.
                 Event::PointerButton { button: PointerButton::Primary, .. } | Event::PointerMoved(_) | Event::PointerGone if touching => {}
                 other => out.push(other),
@@ -215,6 +226,15 @@ impl TouchTranslator {
         self.mode = Mode::Scroll { at: mid, spread, origin };
     }
 
+    /// A tap at `pos`: press now and release on the next frame (unless the caller releases now).
+    fn tap(&mut self, now: f64, pos: Pos2, out: &mut Vec<Event>) {
+        out.push(Event::PointerMoved(pos));
+        out.push(button(pos, PointerButton::Primary, true));
+        self.queued.push(button(pos, PointerButton::Primary, false));
+        self.queued.push(Event::PointerGone);
+        self.last_tap = Some((pos, now));
+    }
+
     fn lift(&mut self, now: f64, pos: Pos2, cancel: bool, out: &mut Vec<Event>) {
         match self.mode {
             Mode::Pending { .. } if cancel => {
@@ -222,11 +242,7 @@ impl TouchTranslator {
                 self.mode = Mode::Idle;
             }
             Mode::Pending { .. } => {
-                out.push(Event::PointerMoved(pos));
-                out.push(button(pos, PointerButton::Primary, true));
-                self.queued.push(button(pos, PointerButton::Primary, false));
-                self.queued.push(Event::PointerGone);
-                self.last_tap = Some((pos, now));
+                self.tap(now, pos, out);
                 self.mode = Mode::Idle;
             }
             Mode::Held { .. } => {
@@ -377,7 +393,19 @@ mod tests {
         let mut t = TouchTranslator::default();
         assert_eq!(frame(&mut t, 0.00, down(0, 100.0, 50.0)), Vec::<String>::new(), "nothing happens until we know it is a tap");
         assert_eq!(frame(&mut t, 0.05, moved(0, 103.0, 52.0)), Vec::<String>::new(), "a wobble within the slop is still a tap");
-        assert_eq!(frame(&mut t, 0.10, up(0, 103.0, 52.0)), ["move 103 52", "press Primary 103 52"]);
+        assert_eq!(
+            frame(&mut t, 0.10, up(0, 103.0, 52.0)),
+            ["move 103 52", "press Primary 103 52", "release Primary 103 52", "gone"],
+            "the pointer release clicks at once, while the browser is still handling the tap"
+        );
+        assert_eq!(frame(&mut t, 0.12, vec![]), Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_lift_without_a_pointer_release_clicks_over_two_frames() {
+        let mut t = TouchTranslator::default();
+        frame(&mut t, 0.00, down(0, 100.0, 50.0));
+        assert_eq!(frame(&mut t, 0.10, vec![touch(0, TouchPhase::End, 103.0, 52.0)]), ["move 103 52", "press Primary 103 52"]);
         assert_eq!(frame(&mut t, 0.12, vec![]), ["release Primary 103 52", "gone"], "the release comes a frame later so egui sees a click");
         assert_eq!(frame(&mut t, 0.14, vec![]), Vec::<String>::new());
     }
