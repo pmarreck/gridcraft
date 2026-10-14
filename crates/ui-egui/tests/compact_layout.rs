@@ -45,8 +45,11 @@ fn idle(h: &mut Harness) {
     h.run_steps(1);
 }
 
+/// The ribbon tab named `tab`: the lowest of the buttons with that name, since the title bar
+/// above has a Home button too.
 fn tab_rect(h: &Harness, tab: &str) -> egui::Rect {
-    h.get_by_role_and_label(Role::Button, tab).rect()
+    let rects = h.query_all_by_role_and_label(Role::Button, tab).map(|n| n.rect());
+    rects.max_by(|a, b| a.top().total_cmp(&b.top())).unwrap_or_else(|| panic!("no {tab} tab"))
 }
 
 #[test]

@@ -14,6 +14,25 @@ fn tr<'a>(ui: &Ui, text: &'a str) -> &'a str {
     i18n::current(ui.ctx()).tr(text)
 }
 
+/// The name a screen reader announces for a ribbon control: its tooltip without the trailing
+/// note in parentheses (a shortcut such as "(⌘X)", or a hint).
+fn accessible_name(tip: &str) -> &str {
+    match tip.rsplit_once(" (") {
+        Some((name, note)) if note.ends_with(')') && !name.is_empty() => name,
+        _ => tip,
+    }
+}
+
+/// Announce a ribbon button by name (and, for a toggle, whether it's on).
+fn announce(resp: &Response, tip: &str, on: Option<bool>) {
+    let enabled = resp.enabled();
+    let name = accessible_name(tip).to_string();
+    resp.widget_info(|| match on {
+        Some(on) => egui::WidgetInfo::selected(egui::WidgetType::Button, enabled, on, &name),
+        None => egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, &name),
+    });
+}
+
 /// A flat square icon button with hover highlight and tooltip.
 pub fn icon_button(ui: &mut Ui, icon: Icon, color: Color32, tip: &str, size: egui::Vec2) -> Response {
     let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
@@ -24,6 +43,7 @@ pub fn icon_button(ui: &mut Ui, icon: Icon, color: Color32, tip: &str, size: egu
         ui.painter().rect_filled(rect, 4.0, t.hover);
     }
     icons::paint(ui.painter(), Rect::from_center_size(rect.center(), vec2(16.0, 16.0)), icon, color);
+    announce(&resp, tr(ui, tip), None);
     resp.on_hover_text(tr(ui, tip))
 }
 
@@ -38,6 +58,7 @@ pub fn toggle_button(ui: &mut Ui, icon: Icon, on: bool, tip: &str) -> Response {
         ui.painter().rect_filled(rect, 4.0, t.hover);
     }
     icons::paint(ui.painter(), Rect::from_center_size(rect.center(), vec2(16.0, 16.0)), icon, t.text);
+    announce(&resp, tr(ui, tip), Some(on));
     resp.on_hover_text(tr(ui, tip))
 }
 
@@ -73,6 +94,7 @@ pub fn big_button(ui: &mut Ui, icon: Icon, label: &str, tip: &str, dropdown: boo
             );
         }
     }
+    announce(&resp, &label.replace('\n', " "), None);
     resp.on_hover_text(tr(ui, tip))
 }
 
@@ -101,6 +123,7 @@ pub fn small_button(ui: &mut Ui, icon: Icon, label: &str, tip: &str, dropdown: b
             t.text_dim,
         );
     }
+    announce(&resp, if label.is_empty() { tr(ui, tip) } else { label }, None);
     resp.on_hover_text(tr(ui, tip))
 }
 
@@ -122,7 +145,10 @@ pub fn split_button(ui: &mut Ui, icon: Icon, accent: Option<Color32>, tip: &str)
         ui.painter().rect_filled(Rect::from_min_size(pos2(main.left() + 4.0, main.bottom() - 5.0), vec2(17.0, 3.0)), 0.0, c);
     }
     icons::paint(ui.painter(), Rect::from_center_size(arrow.center(), vec2(10.0, 10.0)), Icon::Chevron, t.text_dim);
-    (m.on_hover_text(tr(ui, tip)).clicked(), a)
+    let name = tr(ui, tip);
+    announce(&m, name, None);
+    announce(&a, &format!("{} {}", accessible_name(name), tr(ui, "menu")), None);
+    (m.on_hover_text(name).clicked(), a)
 }
 
 /// A one-line text field for a value stored in the workbook, which callers reload every frame. The text being typed is

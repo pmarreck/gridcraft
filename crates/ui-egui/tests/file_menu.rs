@@ -30,8 +30,11 @@ fn choose(h: &mut egui_kittest::Harness<'static, SheetApp>, label: &str) {
     click(h, label);
 }
 
+/// Click the button named `label` drawn last: a dialog's Save over the title bar's.
 fn click(h: &mut egui_kittest::Harness<'static, SheetApp>, label: &str) {
-    h.get_by_role_and_label(egui::accesskit::Role::Button, label).click();
+    use egui_kittest::kittest::Queryable as _;
+    let button = h.query_all_by_role_and_label(egui::accesskit::Role::Button, label).last();
+    button.unwrap_or_else(|| panic!("no {label} button")).click();
     h.run_steps(3);
 }
 
