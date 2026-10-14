@@ -179,7 +179,7 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
 
 /// The ribbon rows scroll only sideways, so a plain vertical mouse wheel over one pans it left and
 /// right instead of doing nothing (as a horizontal wheel, trackpad or finger swipe already does).
-fn wheel_pans_sideways(ui: &Ui, rect: Rect) {
+pub(crate) fn wheel_pans_sideways(ui: &Ui, rect: Rect) {
     if ui.rect_contains_pointer(rect) {
         ui.ctx().input_mut(|i| {
             let d = i.smooth_scroll_delta;

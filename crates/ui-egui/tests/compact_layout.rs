@@ -4,7 +4,7 @@
 
 use egui::accesskit::Role;
 use egui::{Event, Pos2, TouchDeviceId, TouchId, TouchPhase, vec2};
-use egui_kittest::kittest::Queryable as _;
+use egui_kittest::kittest::{NodeT as _, Queryable as _};
 use gridcraft_engine::Session;
 use gridcraft_ui_egui::SheetApp;
 
@@ -224,4 +224,45 @@ fn a_vertical_wheel_over_an_overflowing_ribbon_pans_it_sideways() {
     wheel(&mut h, over_ribbon, vec2(0.0, -10.0));
     let after = paste(&h);
     assert!(after.left() < before.left() - 100.0, "wheeling down pans the ribbon left: {before:?} -> {after:?}");
+}
+
+/// Every page of the File view fits a phone's width: nothing is pushed past the right edge, where
+/// it could not be reached. (The navigation row above the page scrolls sideways instead.)
+#[test]
+fn every_file_view_page_fits_a_phone_width() {
+    use gridcraft_ui_egui::backstage::Page;
+    let pages = [Page::Home, Page::New, Page::Open, Page::Info, Page::SaveAs, Page::Print, Page::Export, Page::Options];
+    let mut overflow = Vec::new();
+    for page in pages {
+        let mut h = harness(PHONE);
+        h.state_mut().open_backstage(page);
+        h.run_steps(4);
+        let nav_bottom = h.get_by_role_and_label(Role::Button, "Back").rect().bottom();
+        for role in [Role::Button, Role::Label, Role::TextInput, Role::CheckBox, Role::ComboBox] {
+            for node in h.query_all_by_role(role) {
+                let r = node.rect();
+                if r.top() < nav_bottom {
+                    continue;
+                }
+                if r.right() > PHONE.x + 0.5 || r.left() < -0.5 {
+                    overflow.push(format!("{page:?}: {role:?} {:?} at {r:?}", node.accesskit_node().label().unwrap_or_default()));
+                }
+            }
+        }
+    }
+    assert!(overflow.is_empty(), "past the screen's edge:\n{}", overflow.join("\n"));
+}
+
+#[test]
+fn the_file_view_navigation_row_scrolls_to_its_last_item_on_a_phone() {
+    use gridcraft_ui_egui::backstage::Page;
+    let mut h = harness(PHONE);
+    h.state_mut().open_backstage(Page::Home);
+    h.run_steps(4);
+    let options = |h: &Harness| h.get_by_role_and_label(Role::Button, "Options").rect();
+    assert!(options(&h).right() > PHONE.x, "Options starts off-screen: {:?}", options(&h));
+    let row = Pos2::new(PHONE.x / 2.0, h.get_by_role_and_label(Role::Button, "Back").rect().center().y);
+    wheel(&mut h, row, vec2(0.0, -40.0));
+    let r = options(&h);
+    assert!(r.left() >= 0.0 && r.right() <= PHONE.x + 0.5, "Options is on screen after wheeling: {r:?}");
 }

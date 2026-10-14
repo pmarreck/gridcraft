@@ -23,6 +23,8 @@ use crate::theme::{self, Tokens};
 
 /// Width of the navigation column.
 const NAV_W: f32 = 196.0;
+/// Height of the navigation row that replaces the column on a phone.
+const NAV_ROW_H: f32 = 38.0;
 /// Width of the content column (pages are left-aligned like a document, not stretched).
 const CONTENT_W: f32 = 760.0;
 
@@ -170,50 +172,77 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
     let mut out = Outcome::default();
     let (nav_bg, nav_text, nav_sel) =
         if t.dark { (t.accent_soft, t.text, Color32::from_white_alpha(30)) } else { (t.accent, Color32::WHITE, Color32::from_black_alpha(46)) };
-    egui::Panel::left("backstage_nav")
-        .exact_size(NAV_W)
-        .resizable(false)
-        .frame(egui::Frame::NONE.fill(nav_bg).inner_margin(egui::Margin { left: 0, right: 0, top: 10, bottom: 10 }))
-        .show(ui, |ui| {
-            ui.spacing_mut().item_spacing.y = 0.0;
-            if nav_item(ui, Icon::Back, lang.tr("Back"), false, nav_text, nav_sel).clicked() {
+    let compact = crate::compact(&ctx);
+    let mut nav = |ui: &mut Ui| {
+        if nav_item(ui, Icon::Back, lang.tr("Back"), false, nav_text, nav_sel).clicked() {
+            out.close = true;
+        }
+        ui.add_space(10.0);
+        for page in [Page::Home, Page::New, Page::Open] {
+            if nav_item(ui, page.icon(), lang.tr(page.label()), bs.page == page, nav_text, nav_sel).clicked() {
+                out.page = Some(page);
+            }
+        }
+        if !compact {
+            nav_separator(ui, nav_text);
+        }
+        if nav_item(ui, Page::Info.icon(), lang.tr("Info"), bs.page == Page::Info, nav_text, nav_sel).clicked() {
+            out.page = Some(Page::Info);
+        }
+        if nav_item(ui, Icon::Save, lang.tr("Save"), false, nav_text, nav_sel).clicked() {
+            save(app, &mut out);
+        }
+        for page in [Page::SaveAs, Page::Print, Page::Export] {
+            if nav_item(ui, page.icon(), lang.tr(page.label()), bs.page == page, nav_text, nav_sel).clicked() {
+                out.page = Some(page);
+            }
+        }
+        if nav_item(ui, Icon::Close, lang.tr("Close"), false, nav_text, nav_sel).clicked() {
+            // A cell still being edited is part of the workbook; Close keeps the unsaved prompt.
+            if app.commit_edit(0, 0, false, false) {
+                app.run_or_alert("file.close", json!({}));
                 out.close = true;
             }
-            ui.add_space(10.0);
-            for page in [Page::Home, Page::New, Page::Open] {
-                if nav_item(ui, page.icon(), lang.tr(page.label()), bs.page == page, nav_text, nav_sel).clicked() {
-                    out.page = Some(page);
-                }
+        }
+        let options = |ui: &mut Ui, out: &mut Outcome| {
+            if nav_item(ui, Page::Options.icon(), lang.tr("Options"), bs.page == Page::Options, nav_text, nav_sel).clicked() {
+                out.page = Some(Page::Options);
             }
-            nav_separator(ui, nav_text);
-            if nav_item(ui, Page::Info.icon(), lang.tr("Info"), bs.page == Page::Info, nav_text, nav_sel).clicked() {
-                out.page = Some(Page::Info);
-            }
-            if nav_item(ui, Icon::Save, lang.tr("Save"), false, nav_text, nav_sel).clicked() {
-                save(app, &mut out);
-            }
-            for page in [Page::SaveAs, Page::Print, Page::Export] {
-                if nav_item(ui, page.icon(), lang.tr(page.label()), bs.page == page, nav_text, nav_sel).clicked() {
-                    out.page = Some(page);
-                }
-            }
-            if nav_item(ui, Icon::Close, lang.tr("Close"), false, nav_text, nav_sel).clicked() {
-                // A cell still being edited is part of the workbook; Close keeps the unsaved prompt.
-                if app.commit_edit(0, 0, false, false) {
-                    app.run_or_alert("file.close", json!({}));
-                    out.close = true;
-                }
-            }
-            ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
-                if nav_item(ui, Page::Options.icon(), lang.tr("Options"), bs.page == Page::Options, nav_text, nav_sel).clicked() {
-                    out.page = Some(Page::Options);
-                }
+        };
+        if compact {
+            options(ui, &mut out);
+        } else {
+            ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| options(ui, &mut out));
+        }
+    };
+    if compact {
+        // A phone has no room for a column beside the page: the items become a row along the top
+        // that scrolls sideways, like the ribbon tabs.
+        egui::Panel::top("backstage_nav").exact_size(NAV_ROW_H).resizable(false).frame(egui::Frame::NONE.fill(nav_bg)).show(ui, |ui| {
+            crate::ribbon::wheel_pans_sideways(ui, ui.max_rect());
+            egui::ScrollArea::horizontal().scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden).show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 0.0;
+                    nav(ui);
+                });
             });
         });
+    } else {
+        egui::Panel::left("backstage_nav")
+            .exact_size(NAV_W)
+            .resizable(false)
+            .frame(egui::Frame::NONE.fill(nav_bg).inner_margin(egui::Margin { left: 0, right: 0, top: 10, bottom: 10 }))
+            .show(ui, |ui| {
+                ui.spacing_mut().item_spacing.y = 0.0;
+                nav(ui);
+            });
+    }
+    let margin =
+        if compact { egui::Margin { left: 16, right: 16, top: 16, bottom: 24 } } else { egui::Margin { left: 44, right: 32, top: 26, bottom: 32 } };
     egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.ribbon)).show(ui, |ui| {
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-            egui::Frame::NONE.inner_margin(egui::Margin { left: 44, right: 32, top: 26, bottom: 32 }).show(ui, |ui| {
-                ui.set_max_width(CONTENT_W);
+            egui::Frame::NONE.inner_margin(margin).show(ui, |ui| {
+                ui.set_max_width(CONTENT_W.min(ui.available_width()));
                 ui.label(RichText::new(lang.tr(bs.page.label())).font(theme::ui_font(28.0)).color(t.text));
                 ui.add_space(18.0);
                 match bs.page {
@@ -265,7 +294,13 @@ fn save(app: &mut SheetApp, out: &mut Outcome) {
 // ---------------------------------------------------------------- navigation
 
 fn nav_item(ui: &mut Ui, icon: Icon, label: &str, selected: bool, text: Color32, sel: Color32) -> egui::Response {
-    let (rect, resp) = ui.allocate_exact_size(vec2(NAV_W, 38.0), Sense::click());
+    // In the compact row each item is as wide as its label.
+    let w = if crate::compact(ui.ctx()) {
+        50.0 + ui.painter().layout_no_wrap(label.to_string(), theme::ui_font(14.0), text).size().x + 14.0
+    } else {
+        NAV_W
+    };
+    let (rect, resp) = ui.allocate_exact_size(vec2(w, 38.0), Sense::click());
     resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, selected, label));
     let p = ui.painter();
     if selected {
@@ -880,7 +915,9 @@ fn print(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcome)
         bs.preview = Some((key, preview));
     }
     let pages: Vec<Json> = bs.preview.as_ref().and_then(|(_, p)| p.get("pageList")).and_then(Json::as_array).cloned().unwrap_or_default();
-    ui.horizontal_top(|ui| {
+    // On a phone the preview goes below the settings instead of beside them.
+    let layout = if crate::compact(ui.ctx()) { egui::Layout::top_down(egui::Align::Min) } else { egui::Layout::left_to_right(egui::Align::Min) };
+    ui.with_layout(layout, |ui| {
         ui.vertical(|ui| {
             ui.set_width(250.0);
             if let Some(discover) = &app.services.printers {
@@ -924,7 +961,7 @@ fn print(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcome)
             // Paper proportions from the preview (points); hostile sizes fall back to Letter.
             let w = page.get("width").and_then(Json::as_f64).filter(|w| w.is_finite() && *w > 1.0).unwrap_or(612.0) as f32;
             let h = page.get("height").and_then(Json::as_f64).filter(|h| h.is_finite() && *h > 1.0).unwrap_or(792.0) as f32;
-            let scale = (520.0 / h).min(440.0 / w);
+            let scale = (520.0 / h).min(ui.available_width().min(440.0) / w);
             let (rect, _) = ui.allocate_exact_size(vec2(w * scale, h * scale), Sense::hover());
             let p = ui.painter();
             p.rect_filled(rect.translate(vec2(2.0, 3.0)), 2.0, t.shadow);
