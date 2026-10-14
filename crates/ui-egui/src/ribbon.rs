@@ -292,6 +292,10 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                 egui::ScrollArea::horizontal().scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden).show(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing = vec2(2.0, 2.0);
+                        // egui's own checkboxes, combo boxes and fields size to this.
+                        if crate::widgets::touch_targets(ui.ctx()) {
+                            ui.spacing_mut().interact_size = vec2(crate::widgets::TOUCH_TARGET, crate::widgets::TOUCH_TARGET);
+                        }
                         match app.ui.ribbon_tab.as_str() {
                             "Home" => home(app, ui),
                             "Insert" => insert(app, ui),
@@ -352,6 +356,12 @@ fn contextual_tabs(app: &SheetApp) -> Vec<&'static str> {
         }
     }
     v
+}
+
+/// A ribbon group's stack of small controls: rows stacked three high for a mouse, one row of
+/// finger-sized controls for touch (the ribbon scrolls sideways).
+pub(crate) fn stack<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> egui::InnerResponse<R> {
+    if crate::widgets::touch_targets(ui.ctx()) { ui.horizontal(add) } else { ui.vertical(add) }
 }
 
 fn sep(ui: &mut Ui) {
@@ -615,7 +625,7 @@ fn home(app: &mut SheetApp, ui: &mut Ui) {
             ],
         );
     });
-    ui.vertical(|ui| {
+    stack(ui, |ui| {
         let __k = icon_button(ui, Icon::Cut, t.text, "Cut (⌘X)", vec2(26.0, 23.0));
         control_keytip(app, ui, &__k, "edit.cut");
         if __k.clicked() {
@@ -641,7 +651,7 @@ fn home(app: &mut SheetApp, ui: &mut Ui) {
     });
     sep(ui);
     // Font
-    ui.vertical(|ui| {
+    stack(ui, |ui| {
         ui.horizontal(|ui| {
             font_combo(app, ui, &st);
             size_combo(app, ui, &st);
@@ -758,7 +768,7 @@ fn home(app: &mut SheetApp, ui: &mut Ui) {
     });
     sep(ui);
     // Alignment
-    ui.vertical(|ui| {
+    stack(ui, |ui| {
         ui.horizontal(|ui| {
             for (icon, v, id, tip) in [
                 (Icon::AlignTop, VAlign::Top, "home.alignTop", "Top Align"),
@@ -843,7 +853,7 @@ fn home(app: &mut SheetApp, ui: &mut Ui) {
     });
     sep(ui);
     // Number
-    ui.vertical(|ui| {
+    stack(ui, |ui| {
         number_combo(app, ui, &st);
         ui.horizontal(|ui| {
             let (c, ca) = split_button(ui, Icon::Currency, None, "Accounting Number Format");
@@ -912,7 +922,7 @@ fn home(app: &mut SheetApp, ui: &mut Ui) {
     egui::Popup::menu(&cs).show(|ui| cell_style_gallery(app, ui));
     sep(ui);
     // Cells
-    ui.vertical(|ui| {
+    stack(ui, |ui| {
         let ins = small_button(ui, Icon::Insert, "Insert", "Insert", true);
         for sequence in keytip_table::group_extension(
             app.keytips.prefix().unwrap_or_default(),
@@ -1010,7 +1020,7 @@ fn home(app: &mut SheetApp, ui: &mut Ui) {
     });
     sep(ui);
     // Editing
-    ui.vertical(|ui| {
+    stack(ui, |ui| {
         ui.horizontal(|ui| {
             let (s, sa) = split_button(ui, Icon::Sum, None, "AutoSum (⌘⇧T)");
             control_keytip(app, ui, &sa, "formulas.autoSum");
@@ -1501,7 +1511,7 @@ fn insert(app: &mut SheetApp, ui: &mut Ui) {
             Err(e) => app.message = Some(("GridCraft".into(), crate::clean_error(&e))),
         }
     }
-    ui.vertical(|ui| {
+    stack(ui, |ui| {
         ui.horizontal(|ui| {
             for (icon, tip, cid, subs) in [
                 (
@@ -1765,7 +1775,7 @@ fn page_layout(app: &mut SheetApp, ui: &mut Ui) {
     // Excel), but the key is distinct from the "View" tab so languages can word them apart.
     let screen = app.ui.language.tr("Sheet Options|View");
     let print = app.ui.language.tr("Print");
-    ui.vertical(|ui| {
+    stack(ui, |ui| {
         ui.label(egui::RichText::new(app.ui.language.tr("Gridlines")).strong().small());
         let mut v = sh.0;
         let resp = ui.checkbox(&mut v, screen);
@@ -1780,7 +1790,7 @@ fn page_layout(app: &mut SheetApp, ui: &mut Ui) {
             act(app, "pageLayout.printGridlines", json!({"on": checkbox_on(resp.changed(), p)}));
         }
     });
-    ui.vertical(|ui| {
+    stack(ui, |ui| {
         ui.label(egui::RichText::new(app.ui.language.tr("Headings")).strong().small());
         let mut v = sh.1;
         let resp = ui.checkbox(&mut v, screen);
@@ -1855,7 +1865,7 @@ fn formulas(app: &mut SheetApp, ui: &mut Ui) {
     if __k.clicked() {
         app.open_dialog("nameManager", json!({}));
     }
-    ui.vertical(|ui| {
+    stack(ui, |ui| {
         let __k = small_button(ui, Icon::Name, "Define Name", "Define Name", false);
         control_keytip(app, ui, &__k, "dialog:defineName");
         if __k.clicked() {
@@ -1879,7 +1889,7 @@ fn formulas(app: &mut SheetApp, ui: &mut Ui) {
         }
     });
     sep(ui);
-    ui.vertical(|ui| {
+    stack(ui, |ui| {
         if small_button(ui, Icon::Trace, "Trace Precedents", "Trace Precedents", false).clicked()
             && let Ok(r) = app.run("formulas.tracePrecedents", json!({}))
         {
@@ -1894,7 +1904,7 @@ fn formulas(app: &mut SheetApp, ui: &mut Ui) {
             app.grid.trace = None;
         }
     });
-    ui.vertical(|ui| {
+    stack(ui, |ui| {
         let __k = small_button(ui, Icon::Fx, "Show Formulas", "Show Formulas (⌃`)", false);
         control_keytip(app, ui, &__k, "formulas.showFormulas");
         if __k.clicked() {
@@ -1930,7 +1940,7 @@ fn formulas(app: &mut SheetApp, ui: &mut Ui) {
             ],
         );
     });
-    ui.vertical(|ui| {
+    stack(ui, |ui| {
         let __k = small_button(ui, Icon::Calc, "Calculate Now", "Calculate Now (F9)", false);
         control_keytip(app, ui, &__k, "formulas.calculateNow");
         if __k.clicked() {
@@ -1951,7 +1961,7 @@ fn data(app: &mut SheetApp, ui: &mut Ui) {
         app.open_dialog("open", json!({}));
     }
     sep(ui);
-    ui.vertical(|ui| {
+    stack(ui, |ui| {
         let __k = small_button(ui, Icon::SortAsc, "", "Sort A to Z", false);
         control_keytip(app, ui, &__k, "data.sortAscending");
         if __k.clicked() {
@@ -1973,7 +1983,7 @@ fn data(app: &mut SheetApp, ui: &mut Ui) {
     if __k.clicked() {
         act(app, "data.filter", json!({}));
     }
-    ui.vertical(|ui| {
+    stack(ui, |ui| {
         let __k = small_button(ui, Icon::Eraser, "Clear", "Clear Filter", false);
         control_keytip(app, ui, &__k, "data.clearFilter");
         if __k.clicked() {
@@ -2038,7 +2048,7 @@ fn data(app: &mut SheetApp, ui: &mut Ui) {
         app.open_dialog("forecastSheet", json!({}));
     }
     sep(ui);
-    ui.vertical(|ui| {
+    stack(ui, |ui| {
         let __k = small_button(ui, Icon::Group, "Group", "Group", false);
         control_keytip(app, ui, &__k, "data.group");
         if __k.clicked() {
@@ -2055,7 +2065,7 @@ fn data(app: &mut SheetApp, ui: &mut Ui) {
             app.open_dialog("subtotal", json!({}));
         }
     });
-    ui.vertical(|ui| {
+    stack(ui, |ui| {
         if small_button(ui, Icon::Plus, "Show Detail", "Show Detail", false).clicked() {
             act(app, "data.showDetail", json!({}));
         }
@@ -2100,7 +2110,7 @@ fn review(app: &mut SheetApp, ui: &mut Ui) {
     if __k.clicked() {
         act(app, "review.deleteComment", json!({}));
     }
-    ui.vertical(|ui| {
+    stack(ui, |ui| {
         for (icon, label, tip, id) in
             [(Icon::Left, "Previous", "Previous Comment", "review.previousComment"), (Icon::Right, "Next", "Next Comment", "review.nextComment")]
         {
@@ -2177,7 +2187,7 @@ fn view(app: &mut SheetApp, ui: &mut Ui) {
     let page_layout =
         app.session.active().and_then(|d| d.wb.active().map(|s| s.view == gridcraft_engine::model::SheetViewMode::PageLayout)).unwrap_or(false);
     // Two columns of two, as in Excel's Show group: four stacked rows overflow the ribbon body.
-    ui.vertical(|ui| {
+    stack(ui, |ui| {
         // Rulers exist only in Page Layout view.
         let mut ruler = !app.session.hide_ruler;
         let ruler_resp = ui.add_enabled(page_layout, egui::Checkbox::new(&mut ruler, lang.tr("Ruler")));
@@ -2193,7 +2203,7 @@ fn view(app: &mut SheetApp, ui: &mut Ui) {
         }
     });
     ui.add_space(6.0);
-    ui.vertical(|ui| {
+    stack(ui, |ui| {
         let mut fb = app.session.prefs.formula_bar;
         let resp = ui.checkbox(&mut fb, lang.tr("Formula Bar"));
         control_keytip(app, ui, &resp, "view.formulaBar");
@@ -2243,7 +2253,7 @@ fn view(app: &mut SheetApp, ui: &mut Ui) {
             ],
         );
     });
-    ui.vertical(|ui| {
+    stack(ui, |ui| {
         ui.label(lang.tr("Display theme"));
         let mode = app.ui.theme_mode();
         let label = match mode {
@@ -2266,7 +2276,7 @@ fn view(app: &mut SheetApp, ui: &mut Ui) {
     });
     sep(ui);
     // Interface size (issue #230): scales the whole window on top of the desktop's scale.
-    ui.vertical(|ui| {
+    stack(ui, |ui| {
         ui.label(egui::RichText::new(lang.tr("Interface size")).font(theme::ui_font(11.5)).color(t.text_dim));
         let current = app.ui.interface_scale;
         let text = |v: u16| if v == 100 { lang.tr("Auto").to_string() } else { format!("{v}%") };
@@ -2283,7 +2293,7 @@ fn view(app: &mut SheetApp, ui: &mut Ui) {
     });
     // Interface language: settings live in the View tab, like Excel's Options. The label follows
     // the current language so it stays readable; the choices are always shown in their own script.
-    ui.vertical(|ui| {
+    stack(ui, |ui| {
         ui.label(egui::RichText::new(lang.tr("Interface language")).font(theme::ui_font(11.5)).color(t.text_dim));
         egui::ComboBox::from_id_salt("ui_language").width(120.0).selected_text(egui::RichText::new(lang.name()).font(theme::ui_font(12.5))).show_ui(
             ui,
@@ -2332,7 +2342,7 @@ fn table_design(app: &mut SheetApp, ui: &mut Ui) {
     }) else {
         return;
     };
-    ui.vertical(|ui| {
+    stack(ui, |ui| {
         ui.label(egui::RichText::new("Table Name:").small());
         let field = egui::Id::new(("gridcraft.table_name", &tname));
         if let Some(name) = crate::widgets::committed_text(ui, field, &tname, Some(120.0))
@@ -2357,7 +2367,7 @@ fn table_design(app: &mut SheetApp, ui: &mut Ui) {
         act(app, "table.insertSlicer", json!({"table": tname}));
     }
     sep(ui);
-    ui.vertical(|ui| {
+    stack(ui, |ui| {
         for (label, cmd, v) in [
             ("Header Row", "table.headerRow", header && filter),
             ("Total Row", "table.totalRow", totals),
@@ -2369,7 +2379,7 @@ fn table_design(app: &mut SheetApp, ui: &mut Ui) {
             }
         }
     });
-    ui.vertical(|ui| {
+    stack(ui, |ui| {
         for (label, cmd, v) in [
             ("First Column", "table.firstColumn", first),
             ("Last Column", "table.lastColumn", last),

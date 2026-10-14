@@ -2,7 +2,9 @@
 //!
 //! `cargo run --release -p gridcraft-ui-egui --example snapshot -- [--sample sales] [--in file.xlsx]
 //!  [--size 1440x900] [--scale 2] [--cmd 'id={json}']... [--tab Insert] [--dark] [--language en|zh|ja|ko|ru|pt|cs]
-//!  [--dialog 'name={json}'] [--hf-edit header|footer] out.png`
+//!  [--dialog 'name={json}'] [--hf-edit header|footer] [--touch] out.png`
+//!
+//! `--touch` taps the grid first, so the ribbon shows its finger-sized layout.
 
 use gridcraft_engine::Session;
 use gridcraft_ui_egui::SheetApp;
@@ -10,6 +12,7 @@ use serde_json::json;
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut touch = false;
     let mut sample = None;
     let mut input = None;
     let mut size = (1440.0f32, 900.0f32);
@@ -55,6 +58,7 @@ fn main() {
                 tab = args.get(i).cloned();
             }
             "--dark" => dark = true,
+            "--touch" => touch = true,
             "--pane" => {
                 i += 1;
                 pane = args.get(i).cloned();
@@ -127,6 +131,17 @@ fn main() {
                 app
             },
         );
+    if touch {
+        // A tap on the grid, through the app's raw-input hook as the shells deliver touches.
+        let at = egui::pos2(size.0 / 2.0, size.1 - 120.0);
+        for phase in [egui::TouchPhase::Start, egui::TouchPhase::End] {
+            let mut raw = std::mem::take(harness.input_mut());
+            raw.events.push(egui::Event::Touch { device_id: egui::TouchDeviceId(1), id: egui::TouchId(0), phase, pos: at, force: None });
+            harness.state_mut().raw_input_hook(&mut raw);
+            *harness.input_mut() = raw;
+            harness.step();
+        }
+    }
     harness.run_steps(8);
     let img = harness.render().expect("render");
     img.save(&out).expect("save png");

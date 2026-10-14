@@ -14,6 +14,35 @@ fn tr<'a>(ui: &Ui, text: &'a str) -> &'a str {
     i18n::current(ui.ctx()).tr(text)
 }
 
+/// The smallest target a fingertip hits reliably (Apple's Human Interface Guidelines), in points.
+pub const TOUCH_TARGET: f32 = 44.0;
+
+fn touch_targets_key() -> egui::Id {
+    egui::Id::new("gridcraft.touch_targets")
+}
+
+/// Whether the ribbon draws finger-sized controls this frame: the person is using touch.
+pub fn touch_targets(ctx: &egui::Context) -> bool {
+    ctx.data(|d| d.get_temp(touch_targets_key())).unwrap_or(false)
+}
+
+/// Sets [`touch_targets`] for the current frame; call once per frame before anything is drawn.
+pub fn set_touch_targets(ctx: &egui::Context, on: bool) {
+    ctx.data_mut(|d| d.insert_temp(touch_targets_key(), on));
+}
+
+/// Whether this `ui` draws finger-sized controls: the ribbon sets egui's interact size to a
+/// fingertip's target while the person uses touch. The title bar and formula bar keep their
+/// fixed heights, so their buttons stay as they are.
+fn fingertip_scope(ui: &Ui) -> bool {
+    touch_targets(ui.ctx()) && ui.spacing().interact_size.y >= TOUCH_TARGET
+}
+
+/// `size`, grown to a fingertip's target inside the touch ribbon.
+fn finger_sized(ui: &Ui, size: egui::Vec2) -> egui::Vec2 {
+    if fingertip_scope(ui) { size.max(vec2(TOUCH_TARGET, TOUCH_TARGET)) } else { size }
+}
+
 /// The name a screen reader announces for a ribbon control: its tooltip without the trailing
 /// note in parentheses (a shortcut such as "(⌘X)", or a hint).
 fn accessible_name(tip: &str) -> &str {
@@ -35,7 +64,7 @@ fn announce(resp: &Response, tip: &str, on: Option<bool>) {
 
 /// A flat square icon button with hover highlight and tooltip.
 pub fn icon_button(ui: &mut Ui, icon: Icon, color: Color32, tip: &str, size: egui::Vec2) -> Response {
-    let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
+    let (rect, resp) = ui.allocate_exact_size(finger_sized(ui, size), Sense::click());
     let t = Tokens::get(ui.ctx());
     if resp.is_pointer_button_down_on() {
         ui.painter().rect_filled(rect, 4.0, t.pressed);
@@ -49,7 +78,7 @@ pub fn icon_button(ui: &mut Ui, icon: Icon, color: Color32, tip: &str, size: egu
 
 /// A toggle-able small button (e.g. Bold) showing a checked state.
 pub fn toggle_button(ui: &mut Ui, icon: Icon, on: bool, tip: &str) -> Response {
-    let (rect, resp) = ui.allocate_exact_size(vec2(26.0, 24.0), Sense::click());
+    let (rect, resp) = ui.allocate_exact_size(finger_sized(ui, vec2(26.0, 24.0)), Sense::click());
     let t = Tokens::get(ui.ctx());
     if on {
         ui.painter().rect_filled(rect, 4.0, t.pressed);
@@ -105,7 +134,7 @@ pub fn small_button(ui: &mut Ui, icon: Icon, label: &str, tip: &str, dropdown: b
     let label = tr(ui, label);
     let tw = if label.is_empty() { 0.0 } else { ui.painter().layout_no_wrap(label.to_string(), font.clone(), t.text).size().x + 6.0 };
     let w = 24.0 + tw + if dropdown { 12.0 } else { 0.0 };
-    let (rect, resp) = ui.allocate_exact_size(vec2(w, 23.0), Sense::click());
+    let (rect, resp) = ui.allocate_exact_size(finger_sized(ui, vec2(w, 23.0)), Sense::click());
     if resp.is_pointer_button_down_on() {
         ui.painter().rect_filled(rect, 4.0, t.pressed);
     } else if resp.hovered() {
@@ -131,8 +160,9 @@ pub fn small_button(ui: &mut Ui, icon: Icon, label: &str, tip: &str, dropdown: b
 /// Returns (main clicked, arrow response).
 pub fn split_button(ui: &mut Ui, icon: Icon, accent: Option<Color32>, tip: &str) -> (bool, Response) {
     let t = Tokens::get(ui.ctx());
-    let (rect, _) = ui.allocate_exact_size(vec2(38.0, 24.0), Sense::hover());
-    let main = Rect::from_min_size(rect.min, vec2(25.0, 24.0));
+    let (main_size, arrow_w) = if fingertip_scope(ui) { (vec2(TOUCH_TARGET, TOUCH_TARGET), TOUCH_TARGET) } else { (vec2(25.0, 24.0), 13.0) };
+    let (rect, _) = ui.allocate_exact_size(vec2(main_size.x + arrow_w, main_size.y), Sense::hover());
+    let main = Rect::from_min_size(rect.min, main_size);
     let arrow = Rect::from_min_max(pos2(main.right(), rect.top()), rect.max);
     let m = ui.interact(main, ui.id().with((tip, "main")), Sense::click());
     let a = ui.interact(arrow, ui.id().with((tip, "arrow")), Sense::click());

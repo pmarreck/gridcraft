@@ -72,6 +72,8 @@ pub struct TouchTranslator {
     /// Recent scroll steps, for a flick's speed.
     samples: VecDeque<(f64, Vec2)>,
     momentum: Option<Momentum>,
+    /// See [`TouchTranslator::coarse`].
+    coarse: bool,
 }
 
 fn button(pos: Pos2, button: PointerButton, pressed: bool) -> Event {
@@ -83,10 +85,22 @@ fn wheel(delta: Vec2, phase: TouchPhase) -> Event {
 }
 
 impl TouchTranslator {
+    /// Whether the person is pointing with a finger (a coarse pointer, in CSS terms), so controls
+    /// should be finger-sized.
+    pub fn coarse(&self) -> bool {
+        self.coarse
+    }
+
     /// Rewrite one frame's `events` at time `now` (seconds). Returns how soon another frame is
     /// needed (for a pending long press, momentum or a queued release), or `None`.
     pub fn translate(&mut self, now: f64, events: &mut Vec<Event>) -> Option<f64> {
         let touching = !self.fingers.is_empty() || events.iter().any(|e| matches!(e, Event::Touch { .. }));
+        // Only a mouse or trackpad hovers or wheels with no finger down.
+        if touching {
+            self.coarse = true;
+        } else if events.iter().any(|e| matches!(e, Event::PointerMoved(_) | Event::MouseWheel { .. })) {
+            self.coarse = false;
+        }
         if !touching && self.queued.is_empty() && self.momentum.is_none() && self.mode == Mode::Idle {
             return None;
         }
@@ -386,6 +400,41 @@ mod tests {
         let mut events = mouse.clone();
         assert_eq!(t.translate(0.0, &mut events), None);
         assert_eq!(events, mouse);
+    }
+
+    /// A finger makes the pointer coarse (the ribbon grows finger-sized targets); a mouse or
+    /// trackpad, which hovers and wheels with no finger down, makes it fine again. Each case is
+    /// a run of frames and the verdict after the last.
+    #[test]
+    fn the_pointer_is_coarse_after_a_finger_and_fine_after_a_mouse() {
+        let hover = || vec![Event::PointerMoved(pos2(5.0, 6.0))];
+        let scroll = || vec![wheel(vec2(0.0, -10.0), TouchPhase::Move)];
+        let typing = || vec![Event::Text("a".into())];
+        let tap = || vec![down(0, 100.0, 50.0), up(0, 100.0, 50.0)];
+        let cases: Vec<(&str, Vec<Vec<Event>>, bool)> = vec![
+            ("no input yet", vec![], false),
+            ("a hover", vec![hover()], false),
+            ("a wheel", vec![scroll()], false),
+            ("a finger down", vec![down(0, 100.0, 50.0)], true),
+            ("a tap", tap(), true),
+            ("a drag, whose emulated pointer moves", vec![down(0, 100.0, 50.0), moved(0, 100.0, 90.0)], true),
+            ("a tap, then typing", [tap(), vec![typing()]].concat(), true),
+            ("a tap, then a hover", [tap(), vec![hover()]].concat(), false),
+            ("a tap, then a wheel", [tap(), vec![scroll()]].concat(), false),
+            ("a hover, then a tap", [vec![hover()], tap()].concat(), true),
+            ("a hover and a finger in one frame", vec![[hover(), down(0, 100.0, 50.0)].concat()], true),
+        ];
+        let wrong: Vec<_> = cases
+            .into_iter()
+            .filter_map(|(name, frames, coarse)| {
+                let mut t = TouchTranslator::default();
+                for (i, mut events) in frames.into_iter().enumerate() {
+                    t.translate(i as f64 * 0.05, &mut events);
+                }
+                (t.coarse() != coarse).then(|| format!("{name}: expected coarse = {coarse}"))
+            })
+            .collect();
+        assert!(wrong.is_empty(), "{wrong:#?}");
     }
 
     #[test]

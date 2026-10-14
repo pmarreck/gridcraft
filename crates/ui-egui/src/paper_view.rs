@@ -898,7 +898,7 @@ pub fn ribbon_tab(app: &mut SheetApp, ui: &mut egui::Ui) {
         .active()
         .and_then(|d| d.wb.sheet(app.grid.hf_edit.as_ref().map_or(0, |e| e.sheet)).map(|s| (s.print.different_first, s.print.different_odd_even)))
         .unwrap_or_default();
-    ui.vertical(|ui| {
+    crate::ribbon::stack(ui, |ui| {
         let (mut f, mut o) = (first, odd_even);
         if ui.checkbox(&mut f, tr(app, "Different First Page")).changed() {
             set_option(app, "differentFirst", f);

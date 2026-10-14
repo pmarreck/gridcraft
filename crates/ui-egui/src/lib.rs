@@ -1229,6 +1229,8 @@ impl SheetApp {
         text_box::before_ui(self, &ctx);
         // The language the widgets translate with this frame (see `i18n::current`).
         i18n::set_current(&ctx, self.ui.language);
+        // Finger-sized ribbon controls while the person uses touch (see `widgets::touch_targets`).
+        widgets::set_touch_targets(&ctx, self.touch.coarse());
         let t = theme::Tokens::get(&ctx);
         if self.backstage.is_none() {
             self.ribbon_keys(&ctx);
