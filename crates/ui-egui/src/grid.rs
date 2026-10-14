@@ -149,6 +149,9 @@ pub struct GridState {
     pub hscroll: Option<Rect>,
     /// Ctrl+wheel zoom in progress (see [`WheelZoom`]).
     pub wheel_zoom: Option<WheelZoom>,
+    /// The unrounded zoom of a pinch for one (doc uid, sheet). The sheet keeps whole percents, and
+    /// a slow pinch at a low zoom moves less than half of one a frame.
+    pub pinch_zoom: Option<((u64, usize), f32)>,
 }
 
 /// Ctrl+wheel zoom for one (doc uid, sheet). egui eases a notch in over several frames and
@@ -600,8 +603,13 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     if (resp.hovered() || resp.contains_pointer()) && !crate::text_box::contains_pointer(app, ui.ctx()) {
         if pinch != 1.0 && pinch.is_finite() && pinch > 0.0 {
             app.grid.wheel_zoom = None;
-            let z = (sh.zoom as f32 * pinch).clamp(10.0, 400.0).round();
-            let _ = app.session.run("view.zoom", json!({"percent": z}));
+            // Carry on from the unrounded zoom, unless the sheet's zoom has changed some other way.
+            let from = app.grid.pinch_zoom.filter(|&(at, z)| at == place && z.round() == sh.zoom as f32).map_or(sh.zoom as f32, |(_, z)| z);
+            let z = (from * pinch).clamp(10.0, 400.0);
+            app.grid.pinch_zoom = Some((place, z));
+            if z.round() != sh.zoom as f32 {
+                let _ = app.session.run("view.zoom", json!({"percent": z.round()}));
+            }
         } else if zoom_delta != 1.0 {
             // egui's zoom factor is e^(speed × points); one notch is `line_scroll_speed` points.
             let notch = ui.ctx().options(|o| o.input_options.scroll_zoom_speed * o.input_options.line_scroll_speed);

@@ -173,6 +173,30 @@ fn two_fingers_pinch_to_zoom() {
     assert_eq!(selection(&h), range("A1"), "and selects nothing");
 }
 
+/// A slow pinch changes the zoom by less than half a percent a frame at low zooms; rounding each
+/// frame's zoom to a whole percent would throw that away, and the zoom would never move.
+#[test]
+fn a_slow_pinch_at_a_low_zoom_still_zooms() {
+    let mut h = harness();
+    let zoom = |h: &Harness| h.state().session.active().unwrap().wb.active().unwrap().zoom;
+    h.state_mut().session.execute("view.zoom", json!({"percent": 10})).unwrap();
+    h.run_steps(2);
+    assert_eq!(zoom(&h), 10);
+    let c = point(&h, "D8");
+    frame(&mut h, down(0, c - egui::vec2(50.0, 0.0)));
+    frame(&mut h, down(1, c + egui::vec2(50.0, 0.0)));
+    for i in 1..=50 {
+        let half = 50.0 + i as f32;
+        let mut both = moved(0, c - egui::vec2(half, 0.0));
+        both.extend(moved(1, c + egui::vec2(half, 0.0)));
+        frame(&mut h, both);
+    }
+    frame(&mut h, up(1, c + egui::vec2(100.0, 0.0)));
+    frame(&mut h, up(0, c - egui::vec2(100.0, 0.0)));
+    idle(&mut h, 2);
+    assert_eq!(zoom(&h), 20, "spreading twice as wide doubles the zoom, however slowly");
+}
+
 #[test]
 fn a_long_press_opens_the_context_menu_on_that_cell() {
     let mut h = harness();
