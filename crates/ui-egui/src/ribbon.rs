@@ -179,8 +179,31 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
 
 /// The ribbon rows scroll only sideways, so a plain vertical mouse wheel over one pans it left and
 /// right instead of doing nothing (as a horizontal wheel, trackpad or finger swipe already does).
+/// egui smooths each axis separately, so a diagonal gesture ends with a vertical-only tail; the
+/// raw gesture is classified once and remembered while it scrolls, so only a purely vertical one
+/// is remapped.
 pub(crate) fn wheel_pans_sideways(ui: &Ui, rect: Rect) {
-    if ui.rect_contains_pointer(rect) {
+    let (vertical, scrolling) = ui.input(|i| {
+        let vertical = i
+            .events
+            .iter()
+            .filter_map(|e| match e {
+                egui::Event::MouseWheel { delta, .. } if *delta != egui::Vec2::ZERO => Some(delta.x == 0.0),
+                _ => None,
+            })
+            .reduce(|a, b| a && b);
+        (vertical, i.is_scrolling())
+    });
+    let vertical = ui.ctx().data_mut(|d| {
+        let id = egui::Id::new("ribbon_vertical_wheel");
+        if let Some(vertical) = vertical {
+            d.insert_temp(id, vertical);
+        } else if !scrolling {
+            d.remove::<bool>(id);
+        }
+        d.get_temp::<bool>(id).unwrap_or(false)
+    });
+    if vertical && ui.rect_contains_pointer(rect) {
         ui.ctx().input_mut(|i| {
             let d = i.smooth_scroll_delta;
             if d.x == 0.0 && d.y != 0.0 {

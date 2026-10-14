@@ -266,3 +266,24 @@ fn the_file_view_navigation_row_scrolls_to_its_last_item_on_a_phone() {
     let r = options(&h);
     assert!(r.left() >= 0.0 && r.right() <= PHONE.x + 0.5, "Options is on screen after wheeling: {r:?}");
 }
+
+/// egui settles each wheel axis separately, so a diagonal trackpad gesture ends with a few
+/// vertical-only frames. Those must not become extra sideways motion: only a purely vertical
+/// gesture pans the ribbon. (Found by the WordCraft sibling.)
+#[test]
+fn a_diagonal_wheel_over_the_ribbon_keeps_its_horizontal_motion() {
+    let size = vec2(700.0, 844.0);
+    let (mut horizontal, mut diagonal) = (harness(size), harness(size));
+    let at = Pos2::new(size.x / 2.0, tab_rect(&horizontal, "Home").bottom() + 40.0);
+    let paste = |h: &Harness| h.get_by_role_and_label(Role::Button, "Paste").rect().left();
+    let start = paste(&horizontal);
+    wheel(&mut horizontal, at, vec2(-4.0, 0.0));
+    wheel(&mut diagonal, at, vec2(-4.0, -10.0));
+    assert!(paste(&horizontal) < start - 50.0, "the horizontal wheel pans the ribbon");
+    assert!(
+        (paste(&horizontal) - paste(&diagonal)).abs() < 0.5,
+        "the diagonal's vertical part adds no sideways motion: horizontal {}, diagonal {}",
+        paste(&horizontal),
+        paste(&diagonal)
+    );
+}
