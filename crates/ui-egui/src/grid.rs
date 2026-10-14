@@ -2741,6 +2741,28 @@ fn in_cell_editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet, 
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(erect.shrink2(vec2(2.0, 1.0))));
     child.set_clip_rect(clip);
     crate::formula_bar::editor_widget(app, &mut child, id, font, false, erect.width() - 4.0);
+    keep_text_input(ui, id, erect, clip);
+}
+
+/// egui's text field asks for text input only while it is visible, so scrolling the cell being
+/// edited out of view would close the software keyboard mid-edit (eframe's web runner takes the
+/// focus from its hidden text input) and turn the IME off on desktop. While the editor `id` has
+/// the focus, keep asking, at the edge of the visible grid (`clip`) nearest the cell (`erect`).
+fn keep_text_input(ui: &egui::Ui, id: egui::Id, erect: Rect, clip: Rect) {
+    if !ui.memory(|m| m.owns_ime_events(id)) || ui.output(|o| o.ime.is_some()) || !clip.is_positive() {
+        return;
+    }
+    let size = erect.size().min(clip.size());
+    let rect = Rect::from_min_size(erect.min.clamp(clip.min, clip.max - size), size);
+    let to_global = ui.ctx().layer_transform_to_global(ui.layer_id()).unwrap_or_default();
+    ui.output_mut(|o| {
+        o.ime = Some(egui::output::IMEOutput {
+            purpose: egui::viewport::IMEPurpose::Normal,
+            rect: to_global * rect,
+            cursor_rect: to_global * Rect::from_min_size(rect.min, vec2(1.0, rect.height())),
+            should_interrupt_composition: false,
+        });
+    });
 }
 
 /// Test the popup itself, not whether the pointer is over any part of the app.

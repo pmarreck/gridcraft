@@ -95,6 +95,7 @@ fn release() {
 }
 
 /// Whether a picker is waiting for the person to choose or cancel.
+#[cfg(test)]
 pub(crate) fn is_open() -> bool {
     OPEN.with(|open| open.borrow().is_some())
 }

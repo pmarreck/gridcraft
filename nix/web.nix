@@ -58,8 +58,8 @@ in
     cp -r ${import ./web-fonts.nix { inherit pkgs; }} "$out/fonts"
   '';
 
-  # The browser-only tests (the IndexedDB layer and the file picker), run in headless Chromium
-  # through wasm-bindgen-test-runner.
+  # The browser-only tests (the IndexedDB layer, the file picker, and touch focus on the running
+  # app), run in headless Chromium through wasm-bindgen-test-runner.
   # Linux only: nixpkgs has no Chromium for macOS.
   storageTests = craneLib.cargoTest (
     testArgs

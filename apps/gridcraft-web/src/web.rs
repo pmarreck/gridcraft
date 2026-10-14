@@ -56,64 +56,77 @@ pub fn start() {
             create.instance_descriptor.backends = eframe::wgpu::Backends::GL;
         }
         let app_bridge = bridge.clone();
-        let result = eframe::WebRunner::new()
-            .start(
-                canvas,
-                options,
-                Box::new(move |cc| {
-                    let inbox: Inbox = Inbox::default();
-                    let failures = Failures::default();
-                    let mut session = Session::new();
-                    // In host mode the parent sends the workbook to edit; no sample meanwhile.
-                    let q = if app_bridge.is_some() { String::new() } else { query() };
-                    if let Some(name) = q.split(['?', '&']).find_map(|kv| kv.strip_prefix("sample=")) {
-                        let _ = session.execute("file.new", serde_json::json!({"sample": name}));
-                    } else if q.contains("sample") {
-                        let _ = session.execute("file.new", serde_json::json!({"sample": "sales"}));
-                    }
-                    let mut services = services(inbox.clone(), failures.clone(), cc.egui_ctx.clone());
-                    services.library = storage.as_ref().map(|s| s.library.clone());
-                    if let Some(storage) = &storage {
-                        storage.listen(&cc.egui_ctx);
-                    }
-                    if let Some(bridge) = &app_bridge {
-                        bridge.connect(&mut services, inbox.clone(), cc.egui_ctx.clone());
-                    }
-                    let mut app = SheetApp::new(session, services);
-                    app.ui.system_theme = true;
-                    // Follow the browser's language, except a CJK one: the web build has no system
-                    // CJK fonts (none are bundled), so that interface would render as tofu.
-                    let browser = gridcraft_ui_egui::i18n::Language::system();
-                    if !matches!(
-                        browser,
-                        gridcraft_ui_egui::i18n::Language::Zh | gridcraft_ui_egui::i18n::Language::Ja | gridcraft_ui_egui::i18n::Language::Ko
-                    ) {
-                        app.ui.language = browser;
-                    }
-                    SheetApp::setup_context_for_language(&cc.egui_ctx, false, app.ui.language);
-                    if let Some(bridge) = &app_bridge {
-                        if let Some(author) = query_param("author") {
-                            crate::host::Bridge::set_author(&mut app, &author);
-                        }
-                        bridge.post_ready();
-                    }
-                    crate::site_fonts::offer(cc.egui_ctx.clone());
-                    // A host page guards leaving itself; standing alone, the browser asks first.
-                    let unsaved = if app_bridge.is_some() { Rc::default() } else { warn_before_unload() };
-                    Ok(Box::new(WebShell { app, inbox, failures, bridge: app_bridge, storage, unsaved, fonts_seen: None }))
-                }),
-            )
-            .await;
+        let result = launch(canvas, options, move |cc, touch| {
+            let inbox: Inbox = Inbox::default();
+            let failures = Failures::default();
+            let mut session = Session::new();
+            // In host mode the parent sends the workbook to edit; no sample meanwhile.
+            let q = if app_bridge.is_some() { String::new() } else { query() };
+            if let Some(name) = q.split(['?', '&']).find_map(|kv| kv.strip_prefix("sample=")) {
+                let _ = session.execute("file.new", serde_json::json!({"sample": name}));
+            } else if q.contains("sample") {
+                let _ = session.execute("file.new", serde_json::json!({"sample": "sales"}));
+            }
+            let mut services = services(inbox.clone(), failures.clone(), cc.egui_ctx.clone());
+            services.library = storage.as_ref().map(|s| s.library.clone());
+            if let Some(storage) = &storage {
+                storage.listen(&cc.egui_ctx);
+            }
+            if let Some(bridge) = &app_bridge {
+                bridge.connect(&mut services, inbox.clone(), cc.egui_ctx.clone());
+            }
+            let mut app = SheetApp::new(session, services);
+            app.ui.system_theme = true;
+            // Follow the browser's language, except a CJK one: the web build has no system
+            // CJK fonts (none are bundled), so that interface would render as tofu.
+            let browser = gridcraft_ui_egui::i18n::Language::system();
+            if !matches!(
+                browser,
+                gridcraft_ui_egui::i18n::Language::Zh | gridcraft_ui_egui::i18n::Language::Ja | gridcraft_ui_egui::i18n::Language::Ko
+            ) {
+                app.ui.language = browser;
+            }
+            SheetApp::setup_context_for_language(&cc.egui_ctx, false, app.ui.language);
+            if let Some(bridge) = &app_bridge {
+                if let Some(author) = query_param("author") {
+                    crate::host::Bridge::set_author(&mut app, &author);
+                }
+                bridge.post_ready();
+            }
+            crate::site_fonts::offer(cc.egui_ctx.clone());
+            // A host page guards leaving itself; standing alone, the browser asks first.
+            let unsaved = if app_bridge.is_some() { Rc::default() } else { warn_before_unload() };
+            WebShell { app, inbox, failures, bridge: app_bridge, storage, unsaved, fonts_seen: None, touch }
+        })
+        .await;
         if let (Err(e), Some(bridge)) = (&result, &bridge) {
             bridge.post_failed(&format!("{e:?}"));
         }
         if let Some(el) = document.get_element_by_id(LOADING_ID) {
             match result {
-                Ok(()) => el.remove(),
+                Ok(_) => el.remove(),
                 Err(e) => el.set_inner_html(&format!("<p>GridCraft failed to start: {e:?}</p><p>A browser with WebGPU or WebGL2 is required.</p>")),
             }
         }
     });
+}
+
+/// Start eframe on `canvas` with the shell `make` builds, and keep scrolling and pinching from
+/// moving the keyboard focus (`touch_focus`).
+pub(crate) async fn launch(
+    canvas: web_sys::HtmlCanvasElement,
+    options: eframe::WebOptions,
+    make: impl FnOnce(&eframe::CreationContext<'_>, crate::touch_focus::Endings) -> WebShell + 'static,
+) -> Result<eframe::WebRunner, JsValue> {
+    let runner = eframe::WebRunner::new();
+    let touch = crate::touch_focus::Endings::default();
+    let shell_touch = touch.clone();
+    runner.start(canvas, options, Box::new(move |cc| Ok(Box::new(make(cc, shell_touch))))).await?;
+    // The app runs either way; without these, scrolling can blink the software keyboard.
+    if let Err(e) = crate::touch_focus::install(&runner, touch) {
+        log::warn!("couldn't keep scrolling from moving the keyboard focus: {e:?}");
+    }
+    Ok(runner)
 }
 
 fn query() -> String {
@@ -124,7 +137,7 @@ fn query_param(key: &str) -> Option<String> {
     web_sys::UrlSearchParams::new_with_str(&query()).ok()?.get(key)
 }
 
-struct WebShell {
+pub(crate) struct WebShell {
     app: SheetApp,
     inbox: Inbox,
     /// Files the picker refused or couldn't read; each becomes a message box.
@@ -136,6 +149,30 @@ struct WebShell {
     /// The (doc uid, revision, font generation) whose fonts were last requested, so the style
     /// table is walked only when something changed.
     fonts_seen: Option<(u64, u64, u64)>,
+    /// Touch endings `touch_focus` took from eframe, for the next frame.
+    touch: crate::touch_focus::Endings,
+}
+
+impl WebShell {
+    /// A shell around `app` with no storage, host page or unload guard.
+    #[cfg(test)]
+    pub(crate) fn bare(app: SheetApp, touch: crate::touch_focus::Endings) -> Self {
+        WebShell {
+            app,
+            inbox: Inbox::default(),
+            failures: Failures::default(),
+            bridge: None,
+            storage: None,
+            unsaved: Rc::default(),
+            fonts_seen: None,
+            touch,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn app_mut(&mut self) -> &mut SheetApp {
+        &mut self.app
+    }
 }
 
 /// The browser workbook library and the IndexedDB database it is written behind to.
@@ -266,6 +303,7 @@ impl eframe::App for WebShell {
     }
 
     fn raw_input_hook(&mut self, _ctx: &egui::Context, raw: &mut egui::RawInput) {
+        raw.events.append(&mut self.touch.borrow_mut());
         self.app.raw_input_hook(raw);
     }
 
@@ -279,6 +317,10 @@ impl eframe::App for WebShell {
             storage.flush(&mut self.app, ui.ctx());
         }
         self.unsaved.set(self.app.has_unsaved_work());
+    }
+    /// Lets the browser tests reach the app through `WebRunner::app_mut`.
+    fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> {
+        Some(&mut *self)
     }
 }
 

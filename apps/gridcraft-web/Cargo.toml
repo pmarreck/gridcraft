@@ -25,9 +25,10 @@ eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit"] }
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 js-sys = "0.3"
-web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlElement", "HtmlCanvasElement", "HtmlAnchorElement", "HtmlIFrameElement", "Blob", "BlobPropertyBag", "File", "FileList", "HtmlInputElement", "Url", "Location", "CssStyleDeclaration", "Clipboard", "ClipboardItem", "Navigator", "MessageEvent", "UrlSearchParams", "IdbFactory", "IdbOpenDbRequest", "IdbRequest", "IdbDatabase", "IdbObjectStore", "IdbTransaction", "IdbTransactionMode", "DomException", "DomStringList", "BroadcastChannel", "MessageEvent", "BeforeUnloadEvent", "Event", "EventTarget", "Response"] }
+web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlElement", "HtmlCanvasElement", "HtmlAnchorElement", "HtmlIFrameElement", "Blob", "BlobPropertyBag", "File", "FileList", "HtmlInputElement", "Url", "Location", "CssStyleDeclaration", "Clipboard", "ClipboardItem", "Navigator", "MessageEvent", "UrlSearchParams", "IdbFactory", "IdbOpenDbRequest", "IdbRequest", "IdbDatabase", "IdbObjectStore", "IdbTransaction", "IdbTransactionMode", "DomException", "DomStringList", "BroadcastChannel", "MessageEvent", "BeforeUnloadEvent", "Event", "EventTarget", "Response", "AddEventListenerOptions", "DomRect", "PointerEvent", "Touch", "TouchEvent", "TouchList"] }
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 wasm-bindgen-test = "0.3.79"
-# The picker tests choose files the way a drop hands them over.
-web-sys = { version = "0.3", features = ["DataTransfer", "DataTransferItemList", "NodeList"] }
+# The picker tests choose files the way a drop hands them over; the touch tests send the pointer
+# and touch events a browser sends for fingers.
+web-sys = { version = "0.3", features = ["DataTransfer", "DataTransferItemList", "NodeList", "PointerEvent", "PointerEventInit", "Touch", "TouchEvent", "TouchEventInit", "TouchInit"] }
